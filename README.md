@@ -780,6 +780,25 @@ npm run user -- delete ana
 npm run user -- login ana clave123
 ```
 
+### Si desvinculás el WhatsApp desde el celular
+
+Al cerrar sesión desde el teléfono, WhatsApp Web queda con los bindings viejos
+de Puppeteer. Reinyectar encima de esa página revienta el proceso
+(`window['onQRChangedEvent'] already exists!`).
+
+Por eso el bot tiene dos defensas: captura `uncaughtException` para no morir, y
+ante un `LOGOUT`, `UNPAIRED` o `CONFLICT` **cierra el navegador y levanta uno
+limpio** en vez de intentar reinyectar. Si de verdad ya no hay sesión, pide un
+código de emparejamiento nuevo y queda listo para vincular.
+
+En los logs:
+
+```
+[wa] Desconectado: LOGOUT
+[wa] reiniciando el cliente de WhatsApp (motivo: LOGOUT)
+[wa] CODIGO DE EMPAREJAMIENTO: ABCD1234
+```
+
 ### Lista blanca
 
 ```bash
@@ -1031,6 +1050,7 @@ npm run check:e2e
 | `Runtime.callFunctionOn timed out` | El navegador tardó demasiado y quedó colgado | Subir `PUPPETEER_PROTOCOL_TIMEOUT`; si persiste, limpiar el volumen `session-data` |
 | El bot está listo pero no llega ningún mensaje | La sesión quedó colgada o el número vinculado no es `BOT_PHONE` | Ver `numero vinculado:` en el arranque y `entradas` en `/api/estado` |
 | `no se pudo pedir el codigo: ... timed out` | La sesión quedó colgada pidiendo un código que no hacía falta | Estado ya corregido; si reaparece, limpiar el volumen `session-data` |
+| `window['onQRChangedEvent'] already exists!` y el proceso muere | Se cerró sesión desde el celular y la librería reinyectó sobre la página vieja | Estado ya corregido: se reconstruye el navegador en vez de morir |
 | La URL muestra JSON y no una página | Es `/` sin sesión o `/` del servidor de diagnóstico | Abrir el panel en `/` e iniciar sesión; el estado JSON está en `/` con sesión o en `/health` |
 
 ### El código de vinculación no vincula

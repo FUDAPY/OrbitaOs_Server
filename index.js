@@ -975,11 +975,66 @@ function registerClientEvents() {
   client.on('disconnected', (reason) => {
     console.warn(`[wa] Desconectado: ${reason}`);
     health.setReady(false);
+
+    // Un LOGOUT deja la pagina de WhatsApp Web con los bindings viejos de
+    // Puppeteer ("window['onQRChangedEvent'] already exists"). Si se intenta
+    // reinyectar encima, el proceso revienta. La salida es cerrar el navegador
+    // y arrancar uno limpio, que es lo unico que deja la sesion utilizable.
+    if (MOTIVOS_REINICIO.includes(reason)) {
+      reiniciarCliente(reason).catch((err) =>
+        console.error(`[wa] no se pudo reiniciar el cliente: ${err.message}`)
+      );
+    }
   });
   client.on('message', (msg) => {
     // Cada mensaje se procesa por separado; uno fallido no corta el flujo.
     handleMessage(msg).catch((err) => console.error(`[wa] error no capturado: ${err.message}`));
   });
+}
+
+/**
+ * Motivos de desconexion que exigen arrancar el navegador de cero. Un LOGOUT o
+ * un UNPAIRED dejan la pagina con bindings viejos de Puppeteer: reinyectar
+ * encima tira el proceso.
+ */
+const MOTIVOS_REINICIO = ['LOGOUT', 'UNPAIRED', 'CONFLICT', 'NAVIGATION'];
+
+/** Evita que dos reinicios se pisen entre si. */
+let reiniciando = false;
+
+/**
+ * Cierra el navegador y levanta uno limpio, para volver a dejar el cliente
+ * utilizable despues de un logout o de un conflicto de sesion.
+ */
+async function reiniciarCliente(motivo) {
+  if (reiniciando) return;
+  reiniciando = true;
+  console.warn(`[wa] reiniciando el cliente de WhatsApp (motivo: ${motivo})`);
+  health.setReady(false);
+
+  try {
+    await client.destroy();
+  } catch (err) {
+    console.warn(`[wa] al cerrar el navegador: ${err.message}`);
+  }
+  sesionVinculada = false;
+
+  try {
+    await client.initialize();
+    // Si de verdad no hay sesion (recien desvinculado), se pide el codigo.
+    const yaVinculado = await esperarVinculacion(20000);
+    if (!yaVinculado && BOT_PHONE) {
+      await conTope(
+        client.requestPairingCode(BOT_PHONE),
+        60000,
+        'el navegador no respondio'
+      );
+    }
+  } catch (err) {
+    console.error(`[wa] fallo el reinicio del cliente: ${err.message}`);
+  } finally {
+    reiniciando = false;
+  }
 }
 
 /** Apagado ordenado: cierra el navegador y la base de datos. */
@@ -1087,7 +1142,33 @@ async function main() {
 
   process.on('unhandledRejection', (reason) => {
     console.error('[app] promesa rechazada sin manejar:', reason);
+    recuperarDeErrorFatal(reason);
   });
+
+  // Sin esto, cualquier error interno de whatsapp-web.js tumba el proceso y el
+  // bot deja de responder hasta que el orquestador lo reinicie. Caso real:
+  // tras cerrar sesion desde el celular, la libreria reinyecta sobre una pagina
+  // que ya tiene los bindings ("window['onQRChangedEvent'] already exists") y
+  // revienta. Se registra y, si el navegador quedo inservible, se reconstruye.
+  process.on('uncaughtException', (err) => {
+    console.error(`[app] excepcion no capturada: ${err.message}`);
+    recuperarDeErrorFatal(err);
+  });
+}
+
+/**
+ * Decide que hacer ante un error que viene de la libreria de WhatsApp.
+ * Los errores de bindings y de sesion cerrada se recuperan reconstruyendo el
+ * navegador; el resto se registra y se sigue, sin tumbar el servicio.
+ */
+function recuperarDeErrorFatal(error) {
+  const mensaje = String((error && error.message) || error || '');
+  if (/already exists|Failed to add page binding|Session closed|Target closed|Navigation|frame was detached/i.test(mensaje)) {
+    console.error('[app] el navegador quedo inservible: se va a reconstruir.');
+    reiniciarCliente('error de navegador').catch((err) =>
+      console.error(`[app] no se pudo recuperar: ${err.message}`)
+    );
+  }
 }
 /**
  * Corre una promesa pero no la espera mas de `ms`. Si se pasa, se rechaza con

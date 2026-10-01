@@ -881,11 +881,15 @@ check('el arranque espera a que la sesion se anuncie', () => {
   // initialize() resuelve ANTES de que la sesion restaurada emita sus eventos.
   // Sin esta espera se pide un codigo sobre una sesion que ya funciona.
   assert.ok(src.includes('esperarVinculacion'), 'debe esperar');
-  const init = src.indexOf('await client.initialize();');
-  const espera = src.indexOf('esperarVinculacion(15000)');
-  const pide = src.indexOf('requestPairingCode(BOT_PHONE)');
-  assert.ok(init > 0 && espera > init, 'debe esperar despues de initialize');
-  assert.ok(espera < pide, 'debe esperar antes de pedir el codigo');
+  const init = src.indexOf('async function initializeWithRecovery');
+  const cuerpo = src.slice(init, src.indexOf('main().catch', init));
+  const posInit = cuerpo.indexOf('await client.initialize();');
+  const posEspera = cuerpo.indexOf('esperarVinculacion(15000)');
+  const posPide = cuerpo.indexOf('requestPairingCode(BOT_PHONE)');
+  assert.ok(init > 0, 'debe existir el arranque');
+  assert.ok(posInit >= 0 && posEspera > posInit, 'debe esperar despues de initialize');
+  assert.ok(posPide > posEspera, 'debe esperar antes de pedir el codigo');
+  assert.ok(cuerpo.includes('if (wantsPairing && !yaVinculado)'), 'el gate se mantiene');
 });
 
 check('una llamada colgada al navegador no frena el arranque', () => {
@@ -894,22 +898,46 @@ check('una llamada colgada al navegador no frena el arranque', () => {
   assert.ok(src.includes('requestPairingCode(BOT_PHONE)'), 'debe seguir pidiendo el codigo');
 });
 
-check('la lista blanca se puede diagnosticar sin terminal', () => {
-  const api = fs.readFileSync(
-    path.join(__dirname, '..', 'src', 'web_api.js'),
-    'utf8'
-  );
-  assert.ok(api.includes('acceso'), 'debe exponer la ruta');
-  assert.ok(api.includes('recursos.consultarAcceso'), 'debe apuntar al handler');
+check('un error interno de la libreria no tumba el bot', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'index.js'), 'utf8');
+  // Caso real: tras cerrar sesion desde el celular, whatsapp-web.js reinyecta
+  // sobre una pagina que ya tiene los bindings de Puppeteer y lanza. Sin este
+  // handler el proceso muere y el bot deja de responder.
+  assert.ok(src.includes("process.on('uncaughtException'"), 'debe capturar uncaughtException');
+  assert.ok(src.includes('recuperarDeErrorFatal'), 'debe decidir como recuperarse');
+  assert.ok(src.includes("already exists"), 'debe reconocer el error de bindings');
+});
+
+check('un logout deja el navegador limpio, no reinyectado encima', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'index.js'), 'utf8');
+  assert.ok(src.includes('MOTIVOS_REINICIO'), 'debe listar los motivos');
+  assert.ok(src.includes("'LOGOUT'"), 'LOGOUT debe reiniciar');
+  const fn = src.indexOf('async function reiniciarCliente');
+  assert.ok(fn > 0, 'debe existir el reinicio');
+  const cuerpo = src.slice(fn, fn + 900);
+  // La salida es cerrar el navegador y abrir uno nuevo, no reinyectar encima.
+  assert.ok(cuerpo.includes('client.destroy()'), 'debe cerrar el navegador');
+  assert.ok(cuerpo.includes('client.initialize()'), 'debe abrir uno nuevo');
+  // Y no se superponen reinicios.
+  assert.ok(cuerpo.includes('if (reiniciando) return;'), 'debe evitar reinicios encimados');
+  // El evento disconnected debe conectar con el reinicio.
+  const ev = src.indexOf("client.on('disconnected'");
+  assert.ok(ev > 0 && src.indexOf('reiniciarCliente(reason)', ev) > ev,
+    'disconnected debe disparar el reinicio');
+});
+
+check('el diagnostico de acceso esta protegido y es utilizable', () => {
   const recursos = fs.readFileSync(
     path.join(__dirname, '..', 'src', 'api_recursos.js'),
     'utf8'
   );
-  assert.ok(recursos.includes('consultarAcceso'), 'debe implementar el handler');
-  // Solo para administradores: expone datos de la lista blanca.
-  const handler = recursos.indexOf('async function consultarAcceso');
-  const cuerpo = recursos.slice(handler, handler + 400);
-  assert.ok(cuerpo.includes('exigirAdmin'), 'debe exigir rol de administrador');
+  const fn = recursos.indexOf('async function consultarAcceso');
+  assert.ok(fn > 0, 'debe existir el handler');
+  const cuerpo = recursos.slice(fn, recursos.indexOf('/** GET /api/estado */', fn));
+  assert.ok(cuerpo.includes('exigirAdmin'), 'solo administradores');
+  assert.ok(cuerpo.includes('isAllowedPhone'), 'consulta el acceso real');
+  assert.ok(cuerpo.includes('mismoTelefono'), 'descarta al bot');
+  assert.ok(cuerpo.includes('contadores()'), 'incluye los contadores de entrada');
 });
 
 console.log('\nZona horaria');
