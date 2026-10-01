@@ -2,6 +2,7 @@
 // OrbitaOs - modulo de gestion de usuarios.
 
 const crypto = require('crypto');
+const whitelist = require('./whitelist');
 const { User } = require('./database');
 
 const SCRYPT = { N: 16384, r: 8, p: 1, keylen: 64, saltlen: 16 };
@@ -69,9 +70,9 @@ function normalizeUsername(username) {
   return String(username || '').trim().toLowerCase();
 }
 
-// Normaliza un telefono a solo digitos.
+// Normaliza un telefono a solo digitos, con el mismo criterio que usa
 function normalizePhone(phone) {
-  return String(phone || '').replace(/\D/g, '');
+  return whitelist.normalizePhone(phone);
 }
 
 // Crea un usuario.
@@ -292,24 +293,75 @@ async function ensureBootstrapUser(opciones) {
  * Lista blanca derivada de la base
  * ---------------------------------------------------------------------- */
 
+// Telefonos autorizados declarados en WHITELIST. No es la fuente de verdad:
+// sirve de carga inicial para que el bot tenga a alguien a quien responder.
+function envPhones() {
+  return (process.env.WHITELIST || '')
+    .split(',')
+    .map((p) => normalizePhone(p))
+    .filter(Boolean);
+}
+
+// Busca un usuario por telefono tolerando diferencias de formato. Primero
+// prueba la coincidencia exacta, que es la que aprovecha el indice, y solo si
+// no aparece busca las variantes ("595981234567" guardado contra "0981 234567"
+// recibido, o al reves). El filtro va aparte para poder exigir allowed=true.
+async function buscarPorPhone(phone, filtro) {
+  const clean = normalizePhone(phone);
+  if (!clean) return null;
+
+  const exacto = await User.findOne({ ...filtro, phone: clean }).lean();
+  if (exacto) return exacto;
+
+  for (const variante of whitelist.variantes(clean)) {
+    if (variante === clean) continue;
+    const u = await User.findOne({ ...filtro, phone: variante }).lean();
+    if (u) return u;
+  }
+
+  // El caso inverso (guardado con codigo de pais, recibido sin el) no se puede
+  // cubrir con las variantes, asi que se compara contra los usuarios que tienen
+  // telefono. Solo se recorre esa lista cuando el numero recibido es corto,
+  // que es justamente cuando puede faltar el prefijo: asi no se pasea la
+  // coleccion por cada remitente desconocido.
+  if (clean.length <= 12) {
+    const candidatos = await User.find({ ...filtro, phone: { $ne: null } })
+      .select('phone')
+      .lean();
+    const SAME = whitelist.mismoTelefono;
+    return candidatos.find((u) => SAME(u.phone, clean)) || null;
+  }
+  return null;
+}
+
+// Igual que buscarPorPhone, pero exigiendo acceso habilitado.
+function buscarPorPhoneConAcceso(phone) {
+  return buscarPorPhone(phone, { allowed: true });
+}
+
+// Devuelve el usuario autorizado de un telefono, con su telefono ya
+// normalizado. Sirve para responder y para guardar la conversacion siempre
+// bajo el mismo chatId, aunque el mensaje haya llegado con otro formato.
+async function findAllowedByPhone(phone) {
+  return buscarPorPhoneConAcceso(phone);
+}
+
 // Indica si un telefono puede hablar con el bot.
+// La fuente de verdad es la coleccion User con allowed=true; WHITELIST queda
+// como respaldo para arrancar sin dar de alta contactos a mano.
 async function isAllowedPhone(phone) {
   const clean = normalizePhone(phone);
   if (!clean) return false;
 
-  const user = await User.findOne({ phone: clean, allowed: true }).lean();
+  const user = await buscarPorPhoneConAcceso(clean);
   if (user) return true;
 
-  const fromEnv = (process.env.WHITELIST || '')
-    .split(',')
-    .map((p) => p.replace(/\D/g, ''))
-    .filter(Boolean);
-  return fromEnv.includes(clean);
+  return envPhones().some((p) => whitelist.mismoTelefono(p, clean));
 }
 
 // Devuelve el usuario registrado para un telefono, si existe.
 async function findByPhone(phone) {
-  return User.findOne({ phone: normalizePhone(phone) }).lean();
+  return buscarPorPhone(phone, {});
 }
 
 module.exports = {
@@ -321,6 +373,7 @@ module.exports = {
   authenticate,
   findByUsername,
   findByPhone,
+  findAllowedByPhone,
   ensureBootstrapUser,
   isAllowedPhone,
   hashPassword,

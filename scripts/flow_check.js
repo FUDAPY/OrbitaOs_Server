@@ -172,6 +172,77 @@ check('el modulo de usuarios esta integrado en index.js', () => {
   assert.ok(src.includes('users.isAllowedPhone'));
 });
 
+check('el modulo de whitelist existe y es puro', () => {
+  const wl = require('../src/whitelist');
+  // Si este modulo tocara la base o el navegador, las reglas de autorizacion
+  // dejarian de ser comprobables sin levantar nada.
+  const src = fs.readFileSync(
+    path.join(__dirname, '..', 'src', 'whitelist.js'),
+    'utf8'
+  );
+  assert.ok(!src.includes('require('), 'no debe requerir nada');
+  assert.ok(!src.includes('mongoose'), 'no debe tocar la base');
+  assert.strictEqual(typeof wl.autorizar, 'function');
+  assert.strictEqual(typeof wl.normalizePhone, 'function');
+  assert.strictEqual(typeof wl.mismoTelefono, 'function');
+});
+
+check('index.js usa las reglas de src/whitelist', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'index.js'), 'utf8');
+  assert.ok(src.includes("require('./src/whitelist')"), 'debe cargarlo');
+  assert.ok(src.includes('whitelist.autorizar'), 'debe pedir el veredicto');
+  assert.ok(src.includes('users.isAllowedPhone'), 'debe consultar la base');
+});
+
+check('BOT_PHONE no autoriza remitentes', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'index.js'), 'utf8');
+  const wl = require('../src/whitelist');
+  // El bot se declara a si mismo no autorizado, aunque este en la base.
+  const r = wl.autorizar({
+    senderId: '595981234567@c.us',
+    botPhone: '595981234567',
+    permitido: () => true,
+  });
+  assert.strictEqual(r.permitido, false);
+  assert.strictEqual(r.motivo, 'bot');
+  // Y el log de arranque lo deja claro para que nadie lo confunda.
+  assert.ok(src.includes('no autoriza remitentes'));
+});
+
+check('la lista blanca se resuelve por el remitente real', () => {
+  const wl = require('../src/whitelist');
+  // En grupos manda el autor, no el grupo.
+  assert.strictEqual(
+    wl.remitenteDe({ from: '120363000000000000@g.us', author: '595991112222@c.us' }),
+    '595991112222@c.us'
+  );
+  const src = fs.readFileSync(path.join(__dirname, '..', 'index.js'), 'utf8');
+  assert.ok(src.includes('resolverRemitente'), 'debe resolver el remitente');
+  assert.ok(src.includes('msg.getContact()'), 'debe resolver los ids @lid');
+});
+
+check('el gate va antes de guardar y antes de la IA', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'index.js'), 'utf8');
+  const corte = src.indexOf('if (!veredicto.permitido) return;');
+  assert.ok(corte > 0, 'debe cortar cuando no esta autorizado');
+  assert.ok(
+    src.indexOf('await persistMessage({', corte) > corte,
+    'no debe guardar un mensaje no autorizado'
+  );
+  assert.ok(
+    src.indexOf('await ai.route(', corte) > corte,
+    'no debe gastar tokens con un mensaje no autorizado'
+  );
+});
+
+check('los logs de whitelist no imprimen el telefono entero', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'index.js'), 'utf8');
+  assert.ok(src.includes('veredicto.motivo'), 'debe decir el motivo');
+  assert.ok(src.includes('whitelist.enmascarar'), 'debe enmascarar');
+  // Y el log viejo, que imprimia el id completo, no debe quedar.
+  assert.ok(!src.includes('mensaje ignorado de ${msg.from}'));
+});
+
 console.log('\nEmparejamiento de WhatsApp');
 
 check('soporta emparejamiento por codigo (BOT_PHONE)', () => {

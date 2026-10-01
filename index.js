@@ -13,6 +13,7 @@ const ai = require('./src/ai_router');
 const cron = require('./src/cron_jobs');
 const programados = require('./src/scheduled_messages');
 const users = require('./src/users');
+const whitelist = require('./src/whitelist');
 const health = require('./src/health_server');
 const taskFlow = require('./src/task_flow');
 
@@ -20,23 +21,48 @@ const { User, Message, Event, Task } = db;
 
 const LOG_MESSAGES = (process.env.LOG_MESSAGES || 'true') === 'true';
 
-// La fuente de verdad es la coleccion User: cualquier usuario con telefono y allowed=true puede hablar con el bot.
+// La fuente de verdad es la coleccion User: cualquier usuario con telefono y
+// allowed=true puede hablar con el bot. BOT_PHONE NO autoriza a nadie, solo
+// identifica al numero emparejado para poder vincular la sesion.
+
+/**
+ * Decide si un remitente puede usar el bot. Devuelve el veredicto de
+ * src/whitelist.js: { permitido, phone, motivo }, para poder loguear por que
+ * se descarto un mensaje sin imprimir el telefono entero.
+ *
+ * La consulta real es users.isAllowedPhone: un usuario guardado con telefono y
+ * allowed=true. BOT_PHONE no participa de la decision salvo para descartar al
+ * propio bot.
+ */
+async function autorizarRemitente(senderId) {
+  const veredicto = whitelist.autorizar({
+    senderId,
+    botPhone: BOT_PHONE,
+    permitido: (phone) => users.isAllowedPhone(phone),
+  });
+  if (!veredicto.permitido) {
+    console.log(
+      `[whitelist] mensaje ignorado (${veredicto.motivo}): ` +
+      `remitente ${whitelist.enmascarar(veredicto.phone)}`
+    );
+  }
+  return veredicto;
+}
+
+// La fuente de verdad es la coleccion User: cualquier usuario con telefono y
+// allowed=true puede hablar con el bot. BOT_PHONE NO autoriza a nadie, solo
+// identifica al numero emparejado para poder vincular la sesion.
 
 /** Normaliza un numero de WhatsApp a solo digitos, sin el @c.us ni el pais agregado. */
 function normalizePhone(id) {
-  return String(id).split('@')[0].replace(/\D/g, '');
-}
-
-// Indica si el remitente esta autorizado, consultando la base de datos.
-async function isAllowed(senderId) {
-  return users.isAllowedPhone(normalizePhone(senderId));
+  return whitelist.normalizePhone(id);
 }
 
 /** Numeros de la variable WHITELIST (respaldo / carga inicial). */
 function envWhitelist() {
   return (process.env.WHITELIST || '')
     .split(',')
-    .map((p) => p.replace(/\D/g, ''))
+    .map((p) => normalizePhone(p))
     .filter(Boolean);
 }
 
@@ -222,10 +248,52 @@ async function getHistory(chatId) {
   }
 }
 
+/**
+ * Resuelve el telefono real de quien manda el mensaje.
+ *
+ * En privado suele venir ya como "595981234567@c.us" y alcanza con normalizar.
+ * Pero WhatsApp tambien entrega ids "@lid" (por ejemplo
+ * "236372620518922@lid"), que NO son el telefono: sin resolverlos, la lista
+ * blanca no los reconoce y el mensaje se descarta. Se pide entonces la ficha
+ * del contacto, que si trae el numero.
+ *
+ * En grupos manda el que escribe (msg.author), no el grupo.
+ */
+async function resolverRemitente(msg) {
+  const senderId = whitelist.remitenteDe(msg);
+  const directo = normalizePhone(senderId);
+
+  // Si ya es un numero con forma de telefono (8 a 15 digitos), no hay nada que
+  // resolver. Los @lid suelen ser largos pero pueden caer en ese rango, asi que
+  // solo se aceptan si el contacto confirma que son el mismo numero.
+  if (directo && !whitelist.esLid(senderId) && /^\d{8,15}$/.test(directo)) {
+    return { phone: directo, senderId };
+  }
+
+  try {
+    const contacto = await msg.getContact();
+    const numero = normalizePhone(contacto && contacto.number);
+    if (numero && /^\d{8,15}$/.test(numero)) return { phone: numero, senderId };
+  } catch (err) {
+    console.warn(`[wa] no se pudo resolver el contacto ${whitelist.enmascarar(directo)}: ${err.message}`);
+  }
+
+  // Sin numero confiable: si venia un id @lid no se inventa nada, se descarta.
+  if (whitelist.esLid(senderId)) {
+    console.warn(
+      `[whitelist] remitente ${whitelist.enmascarar(directo)} sin telefono resoluble (@lid)`
+    );
+    return { phone: '', senderId };
+  }
+  return { phone: directo, senderId };
+}
+
 /** Devuelve el usuario, creandolo la primera vez. */
 async function getOrCreateUser(phone) {
   const clean = normalizePhone(phone);
-  let user = await User.findOne({ phone: clean }).lean();
+  // Busca por variantes, no por coincidencia exacta: si el telefono esta
+  // guardado con otro formato no se debe crear un usuario duplicado.
+  let user = await users.findByPhone(clean);
   if (!user) {
     try {
       user = await User.create({
@@ -490,19 +558,23 @@ async function commandStatus() {
 // Solo los usuarios con rol owner o admin pueden agregar o quitar contactos.
 
 /** Indica si el usuario puede administrar la lista blanca. */
-function isAdmin(phone) {
+async function isAdmin(phone) {
+  const clean = normalizePhone(phone);
   const ADMIN_PHONES = (process.env.ADMIN_WHITELIST || '')
     .split(',')
-    .map((p) => p.replace(/\D/g, ''))
+    .map((p) => normalizePhone(p))
     .filter(Boolean);
-  if (ADMIN_PHONES.includes(normalizePhone(phone))) return true;
+  if (ADMIN_PHONES.some((p) => whitelist.mismoTelefono(p, clean))) return true;
 
   // Tambien si el usuario esta marcado como owner o admin en la base.
-  return db
-    .User.findOne({ phone: normalizePhone(phone) })
-    .lean()
-    .then((u) => Boolean(u && (u.role === 'owner' || u.role === 'admin')))
-    .catch(() => false);
+  // Busca por variantes para que un telefono guardado con otro formato no lo
+  // deje fuera de la administracion de la lista blanca.
+  try {
+    const u = await users.findByPhone(clean);
+    return Boolean(u && (u.role === 'owner' || u.role === 'admin'));
+  } catch (_) {
+    return false;
+  }
 }
 
 /** Comando /agregar <numero> [nombre] */
@@ -515,10 +587,15 @@ async function commandAddContact(args, fromPhone) {
   }
 
   const name = rest.join(' ').trim();
-  const existe = await User.findOne({ phone }).lean();
+  // Busca por variantes: si el numero ya existe con otro formato se actualiza
+  // ese registro en vez de intentar crear uno que choca con el indice unico.
+  const existe = await users.findByPhone(phone);
 
   if (existe) {
-    await User.updateOne({ phone }, { $set: { allowed: true, ...(name ? { name } : {}) } });
+    await User.updateOne(
+      { _id: existe._id },
+      { $set: { phone, allowed: true, ...(name ? { name } : {}) } }
+    );
     return `✅ *${phone}* ya estaba en la lista. Acceso reactivado.`;
   }
 
@@ -539,7 +616,12 @@ async function commandRemoveContact(args) {
   const phone = normalizePhone(args[0] || '');
   if (phone.length < 8) return 'Uso: /quitar <numero>\nEj: /quitar 5491198765432';
 
-  const r = await User.deleteOne({ phone });
+  // Igual que al agregar: se resuelve el registro por variantes y se borra ese,
+  // para no decir "no existe" cuando el numero esta guardado con otro formato.
+  const existe = await users.findByPhone(phone);
+  if (!existe) return `No hay ningun contacto con ${phone}.`;
+
+  const r = await User.deleteOne({ _id: existe._id });
   if (!r.deletedCount) return `No hay ningun contacto con ${phone}.`;
   return `🗑 *${phone}* eliminado de la lista blanca. Ya no puede escribir al bot.`;
 }
@@ -568,34 +650,59 @@ async function commandListContacts() {
 
 // Procesa un mensaje entrante: valida, persiste, enruta a la IA y responde.
 async function handleMessage(msg) {
-  const isGroup = Boolean(msg.from.endsWith('@g.us'));
-  const chatId = normalizePhone(msg.from);
+  const isGroup = whitelist.esGrupo(msg.from);
   const body = (msg.body || '').trim();
 
   if (!body) return;
-  // Ignora estados (read, delivered) y mensajes de sistema.
+  // Ignora estados (read, delivered) y mensajes de sistema: solo se atiende
+  // el chat de texto, en privado y en grupo.
   if (!isGroup && msg.type !== 'chat') return;
 
+  // --- Quien mando el mensaje ---
+  // En grupos el remitente es msg.author (msg.from es el grupo). Y con los ids
+  // nuevos "@lid" el remitente no es un telefono: hay que resolverlo contra la
+  // ficha del contacto antes de comparar nada.
+  const remitente = await resolverRemitente(msg);
+  if (!remitente.phone) return;
+
   // --- Lista blanca: nadie mas es atendido ---
-  if (!(await isAllowed(msg.from))) {
-    console.log(`[whitelist] mensaje ignorado de ${msg.from}`);
-    return;
-  }
+  // Va antes de guardar el mensaje y antes de llamar a la IA: lo que no esta
+  // autorizado no existe para el bot ni para la bitacora.
+  const veredicto = await autorizarRemitente(remitente.phone);
+  if (!veredicto.permitido) return;
+
+  // Si el mensaje llego con otro formato (numero local, con signos), la
+  // conversacion se guarda bajo el telefono que tiene el usuario en la base.
+  // Asi el panel no le abre dos chats distintos a la misma persona.
+  const autorizado = await users.findAllowedByPhone(remitente.phone);
+  const phone = (autorizado && autorizado.phone) || remitente.phone;
+  const chatId = isGroup ? normalizePhone(msg.from) : phone;
 
   // En grupos solo responde si lo invocan con el prefijo configurado.
   const prefix = process.env.GROUP_PREFIX || '';
   if (isGroup && (!prefix || !body.startsWith(prefix))) return;
 
-  if (LOG_MESSAGES) console.log(`[wa] ${msg.from}: ${body}`);
+  if (LOG_MESSAGES) {
+    console.log(
+      `[wa] ${isGroup ? `${whitelist.enmascarar(phone)} en grupo` : phone}: ${body}`
+    );
+  }
 
-  const user = await getOrCreateUser(msg.from);
+  const user = await getOrCreateUser(phone);
   const cleanBody = isGroup ? body.slice(prefix.length).trim() : body;
-  const ctx = { owner: chatId, from: chatId, chatId, timezone: user.timezone };
+  // "from" es quien escribe (no el grupo) para que la bitacora y las acciones
+  // queden atribuidas a la persona, no al chat compartido.
+  const ctx = {
+    owner: chatId,
+    from: phone,
+    chatId,
+    timezone: user.timezone,
+  };
 
   // 1) Guardar el mensaje entrante.
   await persistMessage({
     chatId,
-    from: chatId,
+    from: phone,
     to: 'orbitaos',
     direction: 'inbound',
     body: cleanBody,
@@ -615,7 +722,7 @@ async function handleMessage(msg) {
 
   try {
     if (['/agregar', '/add', '/quitar', '/remove', '/contactos', '/lista'].includes(comando)) {
-      if (!(await isAdmin(msg.from))) {
+      if (!(await isAdmin(remitente.phone))) {
         reply = '⛔ No tenés permiso para administrar la lista blanca.';
       } else if (comando === '/agregar' || comando === '/add') {
         reply = await commandAddContact(args);
@@ -872,7 +979,7 @@ async function main() {
   // que la lista blanca viva en la base y no solo en el entorno.
   const envPhones = envWhitelist();
   for (const phone of envPhones) {
-    const existe = await User.findOne({ phone }).lean();
+    const existe = await users.findByPhone(phone);
     if (!existe) {
       try {
         await User.create({
@@ -889,11 +996,16 @@ async function main() {
     }
   }
 
-  const conAcceso = await User.countDocuments({ allowed: true });
+  // La lista blanca efectiva: usuarios con telefono y allowed=true. Es lo unico
+  // que autoriza a hablar con el bot; BOT_PHONE no cuenta.
+  const conAcceso = await User.countDocuments({ allowed: true, phone: { $ne: null } });
   console.log(`[app] MongoDB conectado. Usuarios con acceso: ${conAcceso}`);
   if (conAcceso === 0 && envPhones.length === 0) {
     console.warn('[app] ATENCION: ningun usuario con acceso. El bot no respondera a nadie.');
     console.warn('[app] Crea uno con: npm run user -- create <usuario> <clave> --phone <numero>');
+  }
+  if (BOT_PHONE) {
+    console.log(`[app] numero del bot: ${BOT_PHONE} (solo vincula la sesion, no autoriza remitentes)`);
   }
 
   registerClientEvents();

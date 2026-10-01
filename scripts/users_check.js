@@ -66,6 +66,42 @@ check('el telefono queda en solo digitos', () => {
   assert.strictEqual(users.normalizePhone(''), '');
 });
 
+console.log('\nLista blanca (reglas puras, sin base de datos)');
+
+check('el telefono se normaliza igual que en WhatsApp', () => {
+  const wl = require('../src/whitelist');
+  // El mismo criterio que usa el modulo de usuarios, sin divergir entre ambos.
+  assert.strictEqual(users.normalizePhone('595 981 234-567@c.us'), '595981234567');
+  assert.strictEqual(users.normalizePhone('595981234567@s.whatsapp.net'), '595981234567');
+  assert.strictEqual(users.normalizePhone(undefined), '');
+  assert.strictEqual(users.normalizePhone(null), '');
+  assert.strictEqual(users.normalizePhone('+595 (981) 234567'), '595981234567');
+});
+
+check('tolera que el telefono se haya guardado con otro formato', () => {
+  const wl = require('../src/whitelist');
+  assert.strictEqual(wl.mismoTelefono('595981234567', '0981234567'), true);
+  assert.strictEqual(wl.mismoTelefono('0981234567', '595981234567'), true);
+  assert.strictEqual(wl.mismoTelefono('595981234567', '595981234567@c.us'), true);
+});
+
+check('no confunde dos telefonos distintos', () => {
+  const wl = require('../src/whitelist');
+  assert.strictEqual(wl.mismoTelefono('595981234567', '595998887777'), false);
+  assert.strictEqual(wl.mismoTelefono('595981234567', ''), false);
+});
+
+check('el numero del bot nunca es un remitente valido', () => {
+  const wl = require('../src/whitelist');
+  const r = wl.autorizar({
+    senderId: '595981234567@c.us',
+    botPhone: '595981234567',
+    permitido: () => true,
+  });
+  assert.strictEqual(r.permitido, false);
+  assert.strictEqual(r.motivo, wl.MOTIVOS.BOT);
+});
+
 console.log('\nValidacion de entradas');
 
 check('rechaza usuario con caracteres invalidos', () => {

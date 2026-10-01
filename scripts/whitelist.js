@@ -5,11 +5,13 @@ require('dotenv').config();
 
 const db = require('../src/database');
 const users = require('../src/users');
+const whitelist = require('../src/whitelist');
 
 const AYUDA = `
 Lista blanca de OrbitaOs
 
   list                       muestra los contactos con acceso
+  check <numero>             dice si un numero tiene acceso y por que
   add <numero> [--name N]    agrega un contacto y le da acceso
       --user <usuario>        lo asocia a un usuario existente
       --role owner|admin|member
@@ -79,6 +81,54 @@ async function main() {
         );
       }
       console.log('');
+      break;
+    }
+
+    case 'check': {
+      if (!phone) {
+        console.error('Uso: check <numero>');
+        process.exit(1);
+      }
+      // Responde la pregunta "¿este numero puede hablar con el bot?" y por que
+      // no, que es lo primero que hay que descartar cuando alguien no recibe
+      // respuesta desde su celular.
+      const botPhone = users.normalizePhone(process.env.BOT_PHONE || '');
+      const usuario = await users.findByPhone(phone);
+      const deEnv = (process.env.WHITELIST || '')
+        .split(',')
+        .map((p) => users.normalizePhone(p))
+        .filter(Boolean)
+        .some((p) => whitelist.mismoTelefono(p, phone));
+
+      console.log(`\nNumero recibido : ${phone}`);
+      console.log(`Coincide con el bot: ${whitelist.mismoTelefono(phone, botPhone) ? 'si' : 'no'}`);
+      if (!usuario) {
+        console.log('Usuario: no esta registrado');
+      } else {
+        console.log(`Usuario: ${usuario.username} (${usuario.role})`);
+        console.log(`Telefono guardado: ${usuario.phone}`);
+        console.log(`Acceso (allowed): ${usuario.allowed ? 'si' : 'NO'}`);
+      }
+      console.log(`Autorizado por WHITELIST: ${deEnv ? 'si' : 'no'}`);
+
+      const acceso = await users.isAllowedPhone(phone);
+      const esBot = whitelist.mismoTelefono(phone, botPhone);
+      console.log(`\nVeredicto: ${acceso && !esBot ? 'TIENE ACCESO' : 'SIN ACCESO'}`);
+      if (esBot) {
+        console.log('Motivo: es el numero del bot, que no se autoriza a si mismo.');
+      } else if (!usuario) {
+        console.log('Motivo: no hay ningun usuario con ese telefono.');
+        console.log('Solucion: npm run whitelist -- add ' + phone);
+      } else if (!usuario.allowed) {
+        console.log('Motivo: el usuario existe pero tiene allowed=false.');
+        console.log('Solucion: npm run whitelist -- allow ' + phone);
+      } else if (!acceso && !deEnv) {
+        console.log('Motivo: el telefono guardado difiere del recibido.');
+        console.log('Solucion: corrige el telefono en el panel o re-agregalo:');
+        console.log('  npm run whitelist -- add ' + phone);
+      }
+      console.log('');
+      process.exitCode = acceso && !esBot ? 0 : 1;
       break;
     }
 

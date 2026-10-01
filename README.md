@@ -764,6 +764,7 @@ lugar de inventar.
 | `npm test` | Suite completa, sin red ni base de datos |
 | `npm run user -- <sub>` | Gestión de usuarios |
 | `npm run whitelist -- <sub>` | Gestión de la lista blanca |
+| `npm run check:whitelist` | Reglas de autorización (sin base de datos) |
 | `npm run reset:session` | Inspección y borrado del perfil de Chromium |
 | `npm run check:api` | Consulta la clave contra la API |
 | `npm run check:e2e` | Flujo completo contra la API |
@@ -783,8 +784,10 @@ npm run user -- login ana clave123
 
 ```bash
 npm run whitelist -- list
+npm run whitelist -- check 595981234567
 npm run whitelist -- add 595981234567 --name "Ana"
 npm run whitelist -- block 595981234567
+npm run whitelist -- allow 595981234567
 npm run whitelist -- remove 595981234567
 ```
 
@@ -793,6 +796,39 @@ Desde el contenedor:
 ```bash
 docker compose exec orbitaos npm run whitelist -- list
 ```
+
+#### Quién puede hablar con el bot
+
+La lista blanca **vive en MongoDB**, en la colección de usuarios: cualquier
+usuario con teléfono y `allowed = true` recibe respuesta y sus mensajes quedan
+guardados. `WHITELIST` solo sirve para dar de alta usuarios al arrancar.
+
+`BOT_PHONE` es otra cosa: identifica el número emparejado para poder vincular la
+sesión. **No autoriza a nadie**, y el bot nunca se responde a sí mismo.
+
+Cuando alguien escribe y no recibe respuesta, el primer paso es:
+
+```bash
+docker compose exec orbitaos npm run whitelist -- check <numero>
+```
+
+Dice si tiene acceso y por qué no la tiene (no está registrado, está en
+`allowed=false`, o el teléfono guardado difiere del que llega).
+
+En los logs, un mensaje descartado se ve así —con el motivo y el teléfono
+enmascarado, nunca completo:
+
+```
+[whitelist] mensaje ignorado (no-autorizado): remitente ***222
+[whitelist] mensaje ignorado (bot): remitente ***567
+```
+
+Los motivos son `sin-telefono`, `bot` y `no-autorizado`.
+
+El teléfono se compara tolerando diferencias de formato: `595981234567`,
+`+595 981 234-567` y `0981234567` son el mismo número. Aun así conviene guardarlo
+siempre con prefijo de país y solo dígitos, porque así la conversación aparece
+siempre en el mismo chat del panel.
 
 > Pasar una contraseña por línea de comandos la deja en el historial del shell.
 > En producción conviene cambiarla con `npm run user -- pass` una vez dentro del

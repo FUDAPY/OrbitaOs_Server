@@ -133,6 +133,30 @@ async function check(name, fn) {
     assert.strictEqual(await users.isAllowedPhone('54911123456789@c.us'), true);
   });
 
+  await check('la lista blanca tolera el formato del telefono', async () => {
+    // Guardado con codigo de pais y recibido como numero local: es el caso que
+    // hacia que el numero autorizado no recibiera respuesta.
+    assert.strictEqual(await users.isAllowedPhone('01112345678'), true);
+    assert.strictEqual(await users.isAllowedPhone('+54 9 11 1234-5678'), true);
+    assert.strictEqual(await users.isAllowedPhone(' 549 11 1234 5678 '), true);
+    // Y al reves: guardado corto, recibido completo.
+    await db.User.updateOne(
+      { username: 'thesadboypy' },
+      { $set: { phone: '01112345678' } }
+    );
+    assert.strictEqual(await users.isAllowedPhone('54911123456789@c.us'), true);
+    await db.User.updateOne(
+      { username: 'thesadboypy' },
+      { $set: { phone: '54911123456789' } }
+    );
+  });
+
+  await check('findByPhone encuentra aunque el formato difiera', async () => {
+    const u = await users.findByPhone('01112345678');
+    assert.ok(u, 'debe encontrarlo');
+    assert.strictEqual(u.username, 'thesadboypy');
+  });
+
   await check('la lista blanca rechaza un desconocido', async () => {
     assert.strictEqual(await users.isAllowedPhone('54911999999999'), false);
   });
@@ -144,6 +168,25 @@ async function check(name, fn) {
     );
     assert.strictEqual(await users.isAllowedPhone('54911123456789'), true);
     assert.strictEqual(await users.isAllowedPhone('54911999999999'), false);
+  });
+
+  await check('un allowed=false explicito tampoco pasa por variante', async () => {
+    // El caso revocado: el usuario existe pero no tiene acceso. Ninguna
+    // variante de su telefono debe reentrar por la puerta de atras.
+    await db.User.create({
+      username: 'revocado',
+      passwordHash: 'x',
+      phone: '549118887777',
+      name: 'Revocado',
+      role: 'member',
+      allowed: false,
+    });
+    assert.strictEqual(await users.isAllowedPhone('549118887777'), false);
+    assert.strictEqual(await users.isAllowedPhone('0118887777'), false);
+    assert.strictEqual(await users.isAllowedPhone('+54 9 11 888 7777'), false);
+    // Reactivarlo si.
+    await db.User.updateOne({ username: 'revocado' }, { $set: { allowed: true } });
+    assert.strictEqual(await users.isAllowedPhone('0118887777'), true);
   });
 
   // Limpieza: solo la coleccion de esta prueba.
