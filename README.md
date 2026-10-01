@@ -806,10 +806,18 @@ guardados. `WHITELIST` solo sirve para dar de alta usuarios al arrancar.
 `BOT_PHONE` es otra cosa: identifica el número emparejado para poder vincular la
 sesión. **No autoriza a nadie**, y el bot nunca se responde a sí mismo.
 
-Cuando alguien escribe y no recibe respuesta, el primer paso es:
+Cuando alguien escribe y no recibe respuesta, el primer paso es consultar
+si ese número tiene acceso. Sin necesidad de terminal:
+
+```
+GET /api/acceso?telefono=595981234567
+```
+
+Devuelve el veredicto y el motivo. También existe el CLI, si se puede
+entrar al contenedor:
 
 ```bash
-docker compose exec orbitaos npm run whitelist -- check <numero>
+docker compose exec orbitaos npm run whitelist -- check 595981234567
 ```
 
 Dice si tiene acceso y por qué no la tiene (no está registrado, está en
@@ -1022,6 +1030,7 @@ npm run check:e2e
 | Los logs repiten `QR recibido` | Normal con `BOT_PHONE`: el QR se ignora | Se avisa una sola vez; revisar más arriba el código vigente |
 | `Runtime.callFunctionOn timed out` | El navegador tardó demasiado y quedó colgado | Subir `PUPPETEER_PROTOCOL_TIMEOUT`; si persiste, limpiar el volumen `session-data` |
 | El bot está listo pero no llega ningún mensaje | La sesión quedó colgada o el número vinculado no es `BOT_PHONE` | Ver `numero vinculado:` en el arranque y `entradas` en `/api/estado` |
+| `no se pudo pedir el codigo: ... timed out` | La sesión quedó colgada pidiendo un código que no hacía falta | Estado ya corregido; si reaparece, limpiar el volumen `session-data` |
 | La URL muestra JSON y no una página | Es `/` sin sesión o `/` del servidor de diagnóstico | Abrir el panel en `/` e iniciar sesión; el estado JSON está en `/` con sesión o en `/health` |
 
 ### El código de vinculación no vincula

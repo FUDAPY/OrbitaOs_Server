@@ -188,6 +188,52 @@ async function construirEstado() {
   return estado;
 }
 
+/**
+ * Diagnostico de la lista blanca: si un telefono puede hablar con el bot y
+ * por que no. GET /api/acceso?telefono=...
+ *
+ * Es la misma respuesta que da el CLI `npm run whitelist -- check`, expuesta
+ * por HTTP para no depender de una terminal en el servidor.
+ */
+async function consultarAcceso(req, res, ctx) {
+  exigirAdmin(ctx);
+  const phone = usuarios.normalizePhone(ctx.query.get('telefono'));
+  if (!phone) throw new Error('Falta el parámetro telefono');
+
+  const botPhone = usuarios.normalizePhone(process.env.BOT_PHONE || '');
+  const usuario = await usuarios.findByPhone(phone);
+  const esBot = whitelist.mismoTelefono(phone, botPhone);
+  const acceso = await usuarios.isAllowedPhone(phone) && !esBot;
+
+  // El por que, en el mismo orden que el CLI.
+  let motivo = 'ok';
+  if (esBot) motivo = 'Es el numero del bot, que no se autoriza a si mismo.';
+  else if (!usuario) {
+    motivo = 'No hay ningun usuario con ese telefono.';
+  } else if (usuario.allowed === false) {
+    motivo = 'El usuario existe pero tiene el acceso desactivado.';
+  } else if (!acceso) {
+    motivo = 'El telefono guardado difiere del que se consulto.';
+  }
+
+  responder(res, 200, {
+    telefono: phone,
+    acceso,
+    motivo,
+    es_bot: esBot,
+    bot_phone: botPhone || null,
+    usuario: usuario
+      ? {
+          username: usuario.username,
+          role: usuario.role,
+          phone: usuario.phone,
+          allowed: usuario.allowed !== false,
+        }
+      : null,
+    entrada: contadores(),
+  });
+}
+
 /** GET /api/estado */
 async function estado(req, res) {
   responder(res, 200, await construirEstado());
@@ -1116,6 +1162,7 @@ module.exports = {
   consumo,
   resumen,
   construirEstado,
+  consultarAcceso,
   setEstadoWhatsapp,
   setContadores,
   setCodigoVinculacion,

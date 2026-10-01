@@ -871,8 +871,45 @@ check('el arranque dice que numero quedo realmente vinculado', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'index.js'), 'utf8');
   // Si el numero vinculado no es BOT_PHONE, el bot escucha en otra linea.
   assert.ok(src.includes('numero vinculado:'), 'debe informarlo');
-  assert.ok(src.includes('client.info'), 'debe leer el wid del cliente');
+  // client.info todavia no existe en 'ready': hay que consultarlo.
+  assert.ok(src.includes('client.getWid()'), 'debe consultarlo al navegador');
   assert.ok(src.includes('distinto de BOT_PHONE'), 'debe avisar si difieren');
+});
+
+check('el arranque espera a que la sesion se anuncie', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'index.js'), 'utf8');
+  // initialize() resuelve ANTES de que la sesion restaurada emita sus eventos.
+  // Sin esta espera se pide un codigo sobre una sesion que ya funciona.
+  assert.ok(src.includes('esperarVinculacion'), 'debe esperar');
+  const init = src.indexOf('await client.initialize();');
+  const espera = src.indexOf('esperarVinculacion(15000)');
+  const pide = src.indexOf('requestPairingCode(BOT_PHONE)');
+  assert.ok(init > 0 && espera > init, 'debe esperar despues de initialize');
+  assert.ok(espera < pide, 'debe esperar antes de pedir el codigo');
+});
+
+check('una llamada colgada al navegador no frena el arranque', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'index.js'), 'utf8');
+  assert.ok(src.includes('conTope'), 'debe haber un tope para las llamadas');
+  assert.ok(src.includes('requestPairingCode(BOT_PHONE)'), 'debe seguir pidiendo el codigo');
+});
+
+check('la lista blanca se puede diagnosticar sin terminal', () => {
+  const api = fs.readFileSync(
+    path.join(__dirname, '..', 'src', 'web_api.js'),
+    'utf8'
+  );
+  assert.ok(api.includes('acceso'), 'debe exponer la ruta');
+  assert.ok(api.includes('recursos.consultarAcceso'), 'debe apuntar al handler');
+  const recursos = fs.readFileSync(
+    path.join(__dirname, '..', 'src', 'api_recursos.js'),
+    'utf8'
+  );
+  assert.ok(recursos.includes('consultarAcceso'), 'debe implementar el handler');
+  // Solo para administradores: expone datos de la lista blanca.
+  const handler = recursos.indexOf('async function consultarAcceso');
+  const cuerpo = recursos.slice(handler, handler + 400);
+  assert.ok(cuerpo.includes('exigirAdmin'), 'debe exigir rol de administrador');
 });
 
 console.log('\nZona horaria');

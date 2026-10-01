@@ -96,6 +96,8 @@ const RUTAS = [
   { metodo: 'GET', patron: /^\/api\/estado$/, handler: recursos.estado },
   { metodo: 'GET', patron: /^\/api\/consumo$/, handler: recursos.consumo },
   { metodo: 'GET', patron: /^\/api\/resumen$/, handler: recursos.resumen },
+  // Diagnostico de la lista blanca, para no depender de una terminal.
+  { metodo: 'GET', patron: /^\/api\/acceso$/, handler: recursos.consultarAcceso },
 
   // --- Mensajes ---
   { metodo: 'GET', patron: /^\/api\/mensajes$/, handler: recursos.listarMensajes },

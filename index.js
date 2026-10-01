@@ -948,16 +948,23 @@ function registerClientEvents() {
     console.log('[wa] OrbitaOs listo y escuchando mensajes.');
     // Numero realmente vinculado. Si no es el de BOT_PHONE, el bot esta
     // escuchando en otra linea y no recibe lo que uno espera.
-    const wid = client.info && client.info.wid;
-    const vinculado = wid ? whitelist.normalizePhone(wid) : '';
-    console.log(
-      vinculado
-        ? `[wa] numero vinculado: ${vinculado}` +
-          (BOT_PHONE && vinculado !== BOT_PHONE
-            ? ` (distinto de BOT_PHONE=${BOT_PHONE})`
-            : '')
-        : '[wa] no se pudo leer el numero vinculado'
-    );
+    // client.info todavia no existe en este instante, asi que se consulta al
+    // navegador y se avisa si tampoco se puede.
+    conTope(client.getWid(), 10000, 'no se pudo consultar el numero vinculado')
+      .then((wid) => {
+        const vinculado = whitelist.normalizePhone(wid && wid._serialized);
+        if (!vinculado) {
+          console.log('[wa] no se pudo leer el numero vinculado');
+          return;
+        }
+        console.log(
+          `[wa] numero vinculado: ${vinculado}` +
+            (BOT_PHONE && vinculado !== BOT_PHONE
+              ? ` (distinto de BOT_PHONE=${BOT_PHONE})`
+              : '')
+        );
+      })
+      .catch((err) => console.warn(`[wa] numero vinculado: ${err.message}`));
     health.setReady(true);
   });
   client.on('auth_failure', (msg) => {
@@ -1082,6 +1089,57 @@ async function main() {
     console.error('[app] promesa rechazada sin manejar:', reason);
   });
 }
+/**
+ * Corre una promesa pero no la espera mas de `ms`. Si se pasa, se rechaza con
+ * `motivo`: hay llamadas al navegador que quedan colgadas y no deben frenar el
+ * arranque ni el procesamiento de mensajes.
+ */
+function conTope(promesa, ms, motivo) {
+  return new Promise((resolve, reject) => {
+    const temporizador = setTimeout(
+      () => reject(new Error(motivo || `tope de ${ms} ms superado`)),
+      ms
+    );
+    Promise.resolve(promesa).then(
+      (valor) => {
+        clearTimeout(temporizador);
+        resolve(valor);
+      },
+      (err) => {
+        clearTimeout(temporizador);
+        reject(err);
+      }
+    );
+  });
+}
+
+/**
+ * Espera a que la sesion de WhatsApp se anuncie (authenticated o ready).
+ * Devuelve true si se anuncio dentro del plazo, false si se agoto.
+ *
+ * initialize() resuelve antes de que esto ocurra, asi que sin esta espera el
+ * arranque no puede distinguir "sesion nueva" de "sesion ya vinculada".
+ */
+function esperarVinculacion(ms) {
+  if (sesionVinculada) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    let listo = false;
+    const terminar = (valor) => {
+      if (listo) return;
+      listo = true;
+      clearTimeout(temporizador);
+      client.removeListener('authenticated', alAutenticar);
+      client.removeListener('ready', alListo);
+      resolve(valor);
+    };
+    const alAutenticar = () => terminar(true);
+    const alListo = () => terminar(true);
+    const temporizador = setTimeout(() => terminar(false), ms);
+    client.once('authenticated', alAutenticar);
+    client.once('ready', alListo);
+  });
+}
+
 // Arranca Chromium y, si falla por un perfil bloqueado o corrupto, lo destruye y reintenta una vez.
 async function initializeWithRecovery() {
   // Si hay BOT_PHONE se pide emparejamiento con codigo, que es lo unico
@@ -1089,9 +1147,6 @@ async function initializeWithRecovery() {
   const wantsPairing = Boolean(BOT_PHONE);
 
   for (let intento = 1; intento <= 2; intento += 1) {
-    // Si el cliente ya quedo autenticado en un intento anterior, se sabe que
-    // hay sesion guardada y no hay que pedir un codigo de emparejamiento.
-    let yaVinculado = sesionVinculada;
     try {
       if (intento === 2) {
         console.log('[wa] segundo intento: se reconstruye el perfil de Chromium');
@@ -1104,16 +1159,29 @@ async function initializeWithRecovery() {
       }
       await client.initialize();
 
+      // initialize() vuelve antes de que la sesion restaurada termine de
+      // declararse: los eventos 'authenticated' y 'ready' llegan despues. Si
+      // se decide aca sin esperar, se pide un codigo de emparejamiento sobre una
+      // sesion que ya funciona, la llamada al navegador se cuelga
+      // ("Runtime.callFunctionOn timed out") y WhatsApp Web deja de procesar
+      // los mensajes entrantes. Por eso se espera a que se anuncie.
+      const yaVinculado = sesionVinculada || (await esperarVinculacion(15000));
+
       // Navegador arriba: con BOT_PHONE se pide el codigo de emparejamiento
       // en vez de mostrar el QR, que en un servidor no se puede escanear.
       //
       // PERO solo si la sesion todavia no esta vinculada. Si ya hay sesion
       // guardada, pedir un codigo es innecesario y peligroso: la llamada al
-      // navegador se queda esperando ("Runtime.callFunctionOn timed out") y
-      // deja WhatsApp Web colgado, sin procesar los mensajes entrantes.
+      // navegador se queda esperando y deja WhatsApp Web colgado.
       if (wantsPairing && !yaVinculado) {
+        // Con tope: si el navegador esta colgado, esta llamada se queda
+        // esperando varios minutos. Se abandona en vez de frenar el arranque.
         try {
-          await client.requestPairingCode(BOT_PHONE);
+          await conTope(
+            client.requestPairingCode(BOT_PHONE),
+            60000,
+            'el navegador no respondio'
+          );
         } catch (err) {
           console.error(`[wa] no se pudo pedir el codigo: ${err.message}`);
         }
