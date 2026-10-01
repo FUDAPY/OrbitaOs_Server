@@ -1020,6 +1020,8 @@ npm run check:e2e
 | `MODO MOCK` en `/estado` | Falta la clave o falló la API | Verificar `SPACE_BUNNY_API_KEY` |
 | El código de vinculación no funciona | Se ingresó uno ya vencido | Usar el `codigo_vinculacion` de la URL, recién recargada |
 | Los logs repiten `QR recibido` | Normal con `BOT_PHONE`: el QR se ignora | Se avisa una sola vez; revisar más arriba el código vigente |
+| `Runtime.callFunctionOn timed out` | El navegador tardó demasiado y quedó colgado | Subir `PUPPETEER_PROTOCOL_TIMEOUT`; si persiste, limpiar el volumen `session-data` |
+| El bot está listo pero no llega ningún mensaje | La sesión quedó colgada o el número vinculado no es `BOT_PHONE` | Ver `numero vinculado:` en el arranque y `entradas` en `/api/estado` |
 | La URL muestra JSON y no una página | Es `/` sin sesión o `/` del servidor de diagnóstico | Abrir el panel en `/` e iniciar sesión; el estado JSON está en `/` con sesión o en `/health` |
 
 ### El código de vinculación no vincula

@@ -94,6 +94,13 @@ let ultimoCodigo = null;
 /** Cuantos codigos se emitieron sin completar la vinculacion. */
 let codigosEmitidos = 0;
 
+/**
+ * true cuando ya hay una sesion de WhatsApp vinculada en este arranque.
+ * Sirve para NO pedir un codigo de emparejamiento sobre una sesion que ya
+ * funciona: esa llamada deja el navegador colgado y se comen los mensajes.
+ */
+let sesionVinculada = false;
+
 // Elimina los locks de Chromium de una ejecucion anterior.
 function clearChromiumLocks() {
   // LocalAuth compone el directorio asi: dataPath + "session-" + clientId.
@@ -168,6 +175,10 @@ const client = new Client({
     headless: process.env.PUPPETEER_HEADLESS === 'false' ? false : 'new',
     // Chromium del sistema (instalado en el Dockerfile), no el de Puppeteer.
     executablePath: process.env.CHROME_PATH || '/usr/bin/chromium',
+    // Por defecto Puppeteer corta cada llamada al navegador a los 3 minutos.
+    // En un contenedor lento, pedir un codigo de emparejamiento o leer un
+    // contacto puede pasarse y dejar la pagina colgada, sin eventos de entrada.
+    protocolTimeout: Number(process.env.PUPPETEER_PROTOCOL_TIMEOUT || 300000),
     args: [
       // Imprescindible en contenedores: sin esto Chromium no arranca como root.
       '--no-sandbox',
@@ -926,6 +937,7 @@ function registerClientEvents() {
   });
 
   client.on('authenticated', () => {
+    sesionVinculada = true;
     console.log('[wa] Autenticado. Sesion vinculada.');
     // Ya no hace falta mostrarlo: se evita que quede un codigo viejo en la web.
     ultimoCodigo = null;
@@ -934,6 +946,18 @@ function registerClientEvents() {
   });
   client.on('ready', () => {
     console.log('[wa] OrbitaOs listo y escuchando mensajes.');
+    // Numero realmente vinculado. Si no es el de BOT_PHONE, el bot esta
+    // escuchando en otra linea y no recibe lo que uno espera.
+    const wid = client.info && client.info.wid;
+    const vinculado = wid ? whitelist.normalizePhone(wid) : '';
+    console.log(
+      vinculado
+        ? `[wa] numero vinculado: ${vinculado}` +
+          (BOT_PHONE && vinculado !== BOT_PHONE
+            ? ` (distinto de BOT_PHONE=${BOT_PHONE})`
+            : '')
+        : '[wa] no se pudo leer el numero vinculado'
+    );
     health.setReady(true);
   });
   client.on('auth_failure', (msg) => {
@@ -1065,6 +1089,9 @@ async function initializeWithRecovery() {
   const wantsPairing = Boolean(BOT_PHONE);
 
   for (let intento = 1; intento <= 2; intento += 1) {
+    // Si el cliente ya quedo autenticado en un intento anterior, se sabe que
+    // hay sesion guardada y no hay que pedir un codigo de emparejamiento.
+    let yaVinculado = sesionVinculada;
     try {
       if (intento === 2) {
         console.log('[wa] segundo intento: se reconstruye el perfil de Chromium');
@@ -1079,12 +1106,19 @@ async function initializeWithRecovery() {
 
       // Navegador arriba: con BOT_PHONE se pide el codigo de emparejamiento
       // en vez de mostrar el QR, que en un servidor no se puede escanear.
-      if (wantsPairing) {
+      //
+      // PERO solo si la sesion todavia no esta vinculada. Si ya hay sesion
+      // guardada, pedir un codigo es innecesario y peligroso: la llamada al
+      // navegador se queda esperando ("Runtime.callFunctionOn timed out") y
+      // deja WhatsApp Web colgado, sin procesar los mensajes entrantes.
+      if (wantsPairing && !yaVinculado) {
         try {
           await client.requestPairingCode(BOT_PHONE);
         } catch (err) {
           console.error(`[wa] no se pudo pedir el codigo: ${err.message}`);
         }
+      } else if (wantsPairing) {
+        console.log('[wa] sesion ya vinculada: no se pide codigo de emparejamiento.');
       }
       return;
     } catch (err) {

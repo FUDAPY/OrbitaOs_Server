@@ -74,6 +74,10 @@ services:
       BOT_PHONE: ${BOT_PHONE:-}
       SESSION_PATH: /app/session
       PUPPETEER_USER_DATA_DIR: /app/.wwebjs
+      # Margen para las llamadas lentas al navegador. Con el default de
+      # Puppeteer (3 min) una pagina de WhatsApp Web lenta se queda colgada y
+      # dejan de llegar los mensajes.
+      PUPPETEER_PROTOCOL_TIMEOUT: ${PUPPETEER_PROTOCOL_TIMEOUT:-300000}
       WEBJS_CACHE_TYPE: local
 
       # --- Cron / recordatorios ---

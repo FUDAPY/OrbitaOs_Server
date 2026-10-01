@@ -844,6 +844,37 @@ check('el QR repetido no inunda los logs', () => {
   );
 });
 
+check('no se pide codigo de emparejamiento si la sesion ya esta vinculada', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'index.js'), 'utf8');
+  // Pedir un codigo sobre una sesion que ya funciona deja el navegador colgado
+  // ("Runtime.callFunctionOn timed out") y se comen los mensajes entrantes.
+  assert.ok(src.includes('sesionVinculada'), 'debe saber si ya hay sesion');
+  assert.ok(
+    src.includes('if (wantsPairing && !yaVinculado)'),
+    'el codigo solo se pide cuando NO hay sesion'
+  );
+  // El flag se activa con el evento authenticated.
+  const aut = src.indexOf("client.on('authenticated'");
+  assert.ok(aut > 0 && src.indexOf('sesionVinculada = true;', aut) > aut,
+    'authenticated debe marcar la sesion como vinculada');
+  // Y el arranque lo dice, para no confundirlo con un fallo.
+  assert.ok(src.includes('sesion ya vinculada: no se pide codigo'));
+});
+
+check('el navegador tiene timeout de protocolo holgado', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'index.js'), 'utf8');
+  // El default de Puppeteer (3 min) corta llamadas lentas del navegador.
+  assert.ok(src.includes('protocolTimeout'), 'debe configurarse');
+});
+
+check('el arranque dice que numero quedo realmente vinculado', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'index.js'), 'utf8');
+  // Si el numero vinculado no es BOT_PHONE, el bot escucha en otra linea.
+  assert.ok(src.includes('numero vinculado:'), 'debe informarlo');
+  assert.ok(src.includes('client.info'), 'debe leer el wid del cliente');
+  assert.ok(src.includes('distinto de BOT_PHONE'), 'debe avisar si difieren');
+});
+
 console.log('\nZona horaria');
 
 check('el compose define TZ en los dos servicios', () => {
