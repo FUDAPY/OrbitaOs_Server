@@ -268,7 +268,7 @@ check('la lista blanca se consulta antes de guardar el mensaje', () => {
   const path = require('path');
   const src = fs.readFileSync(path.join(__dirname, '..', 'index.js'), 'utf8');
   const gate = src.indexOf('autorizarRemitente(remitente.phone)');
-  const corte = src.indexOf('if (!veredicto.permitido) return;');
+  const corte = src.indexOf('entradas.descartados += 1;');
   // La definicion de persistMessage esta antes en el archivo: se busca la
   // llamada, que es la que importa, despues del gate.
   const guardar = src.indexOf('await persistMessage({', corte);

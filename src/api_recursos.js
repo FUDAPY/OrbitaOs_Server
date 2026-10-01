@@ -102,6 +102,32 @@ function estadoWhatsapp() {
 /** Ultimo codigo de vinculacion emitido. Lo inyecta index.js. */
 let codigoVinculacionFn = () => null;
 
+/**
+ * Contadores de mensajes entrantes. Los inyecta index.js: separan "el evento
+ * no llego" de "llego y se descarto", que es la duda habitual cuando alguien
+ * escribe y el bot no contesta.
+ */
+let contadoresFn = () => ({
+  recibidos: 0,
+  autorizados: 0,
+  descartados: 0,
+  ultimo_tipo: null,
+  ultimo_recibido: null,
+});
+
+// Registra la funcion que devuelve los contadores de entrada.
+function setContadores(fn) {
+  if (typeof fn === 'function') contadoresFn = fn;
+}
+
+function contadores() {
+  try {
+    return contadoresFn();
+  } catch (_) {
+    return { recibidos: 0, autorizados: 0, descartados: 0 };
+  }
+}
+
 // Registra la funcion que devuelve el codigo de vinculacion vigente.
 function setCodigoVinculacion(fn) {
   if (typeof fn === 'function') codigoVinculacionFn = fn;
@@ -138,6 +164,7 @@ async function construirEstado() {
     cron_programados: process.env.CRON_SCHEDULED || '*/1 * * * *',
     zona_horaria: process.env.TZ || 'America/Asuncion',
     sesiones_activas: sesion.activas(),
+    entradas: contadores(),
     conteos: {
       users,
       messages,
@@ -1090,6 +1117,7 @@ module.exports = {
   resumen,
   construirEstado,
   setEstadoWhatsapp,
+  setContadores,
   setCodigoVinculacion,
   // Mensajes
   listarMensajes,

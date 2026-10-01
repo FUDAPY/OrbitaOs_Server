@@ -223,7 +223,7 @@ check('la lista blanca se resuelve por el remitente real', () => {
 
 check('el gate va antes de guardar y antes de la IA', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'index.js'), 'utf8');
-  const corte = src.indexOf('if (!veredicto.permitido) return;');
+  const corte = src.indexOf('entradas.descartados += 1;');
   assert.ok(corte > 0, 'debe cortar cuando no esta autorizado');
   assert.ok(
     src.indexOf('await persistMessage({', corte) > corte,
@@ -242,6 +242,34 @@ check('los logs de whitelist no imprimen el telefono entero', () => {
   // Y el log viejo, que imprimia el id completo, no debe quedar.
   assert.ok(!src.includes('mensaje ignorado de ${msg.from}'));
 });
+check('todo mensaje entrante deja rastro antes de filtrarse', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'index.js'), 'utf8');
+  // La traza de entrada tiene que ir antes del primer corte, o un mensaje que
+  // no genera respuesta deja cero rastro y no hay forma de diagnosticarlo.
+  const traza = src.indexOf('[wa] evento recibido:');
+  const primerCorte = src.indexOf('if (!body) return;');
+  assert.ok(traza > 0, 'debe haber traza de entrada');
+  assert.ok(traza < primerCorte, 'la traza debe ir antes de filtrar');
+  // Y se cuentan los eventos, para separar "no llego" de "llego y se descarto".
+  assert.ok(src.includes('entradas.recibidos += 1;'), 'debe contar lo recibido');
+  assert.ok(src.includes('entradas.autorizados += 1;'), 'debe contar lo autorizado');
+  assert.ok(src.includes('entradas.descartados += 1;'), 'debe contar lo descartado');
+});
+
+check('el estado publica los contadores de entrada', () => {
+  const recursos = fs.readFileSync(
+    path.join(__dirname, '..', 'src', 'api_recursos.js'),
+    'utf8'
+  );
+  assert.ok(recursos.includes('setContadores'), 'debe aceptar los contadores');
+  assert.ok(recursos.includes('entradas: contadores()'), 'debe publicarlos en el estado');
+  const health = fs.readFileSync(
+    path.join(__dirname, '..', 'src', 'health_server.js'),
+    'utf8'
+  );
+  assert.ok(health.includes('setContadores'), 'el servidor debe reenviarlos');
+});
+
 
 console.log('\nEmparejamiento de WhatsApp');
 

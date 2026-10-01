@@ -825,6 +825,20 @@ enmascarado, nunca completo:
 
 Los motivos son `sin-telefono`, `bot` y `no-autorizado`.
 
+Si escribiste y no te respondió, mirá primero el contador en
+`GET /api/estado` → `entradas`:
+
+```json
+"entradas": { "recibidos": 12, "autorizados": 10, "descartados": 2 }
+```
+
+- `recibidos` en 0 → el mensaje **no llegó** al bot. Es un problema de la
+  sesión de WhatsApp, no de la lista blanca.
+- `recibidos` sube y `autorizados` en 0 → el evento llega pero se descarta:
+  el log `[whitelist] mensaje ignorado (...)` dice el motivo.
+- `autorizados` sube → el bot recibió y autorizó el mensaje: si no respondió,
+  el problema es posterior (IA o envío).
+
 El teléfono se compara tolerando diferencias de formato: `595981234567`,
 `+595 981 234-567` y `0981234567` son el mismo número. Aun así conviene guardarlo
 siempre con prefijo de país y solo dígitos, porque así la conversación aparece

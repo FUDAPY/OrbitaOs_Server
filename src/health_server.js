@@ -37,6 +37,15 @@ function setReady(value) {
 }
 
 /**
+ * Contadores de mensajes entrantes. Los inyecta index.js: separan "el evento
+ * no llego" de "llego y se descarto", la duda habitual cuando alguien escribe
+ * y el bot no contesta.
+ */
+function setContadores(fn) {
+  recursos.setContadores(fn);
+}
+
+/**
  * Guarda el ultimo codigo de emparejamiento emitido.
  * Lo llama index.js, para poder consultarlo por HTTP.
  */
@@ -164,6 +173,7 @@ module.exports = {
   startHealthServer,
   setReady,
   setPairingCode,
+  setContadores,
   responderJson,
   servirEstatico,
   DEFAULT_PORT,

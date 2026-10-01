@@ -21,6 +21,22 @@ const { User, Message, Event, Task } = db;
 
 const LOG_MESSAGES = (process.env.LOG_MESSAGES || 'true') === 'true';
 
+/**
+ * Contadores de mensajes entrantes. Se publican en /api/estado para poder
+ * distinguir las dos fallas que se ven igual desde afuera: que el evento de
+ * WhatsApp no llegue al proceso, o que llegue y se descarte antes de tiempo.
+ */
+const entradas = {
+  recibidos: 0,
+  autorizados: 0,
+  descartados: 0,
+  ultimo_tipo: null,
+  ultimo_recibido: null,
+};
+
+// Publica los contadores de entrada en /api/estado.
+health.setContadores(() => ({ ...entradas }));
+
 // La fuente de verdad es la coleccion User: cualquier usuario con telefono y
 // allowed=true puede hablar con el bot. BOT_PHONE NO autoriza a nadie, solo
 // identifica al numero emparejado para poder vincular la sesion.
@@ -48,10 +64,6 @@ async function autorizarRemitente(senderId) {
   }
   return veredicto;
 }
-
-// La fuente de verdad es la coleccion User: cualquier usuario con telefono y
-// allowed=true puede hablar con el bot. BOT_PHONE NO autoriza a nadie, solo
-// identifica al numero emparejado para poder vincular la sesion.
 
 /** Normaliza un numero de WhatsApp a solo digitos, sin el @c.us ni el pais agregado. */
 function normalizePhone(id) {
@@ -653,10 +665,26 @@ async function handleMessage(msg) {
   const isGroup = whitelist.esGrupo(msg.from);
   const body = (msg.body || '').trim();
 
+  // Traza de ENTRADA, antes de cualquier filtro. Sin esto no se puede saber si
+  // un mensaje que no genera respuesta llego y se descarto, o si nunca llego
+  // (sesion desincronizada, mensaje del propio bot, evento que no dispara).
+  // El cuerpo solo se imprime si LOG_MESSAGES esta activo.
+  console.log(
+    `[wa] evento recibido: tipo=${msg.type || 'sin-tipo'} ` +
+    `remitente=${whitelist.enmascarar(whitelist.remitenteDe(msg))} ` +
+    (body ? `con texto (${body.length} car.)` : 'sin texto')
+  );
+  entradas.recibidos += 1;
+  entradas.ultimo_tipo = msg.type || null;
+  entradas.ultimo_recibido = new Date().toISOString();
+
   if (!body) return;
   // Ignora estados (read, delivered) y mensajes de sistema: solo se atiende
   // el chat de texto, en privado y en grupo.
-  if (!isGroup && msg.type !== 'chat') return;
+  if (!isGroup && msg.type !== 'chat') {
+    console.log(`[wa] evento descartado: tipo=${msg.type} (solo se atiende texto)`);
+    return;
+  }
 
   // --- Quien mando el mensaje ---
   // En grupos el remitente es msg.author (msg.from es el grupo). Y con los ids
@@ -669,7 +697,11 @@ async function handleMessage(msg) {
   // Va antes de guardar el mensaje y antes de llamar a la IA: lo que no esta
   // autorizado no existe para el bot ni para la bitacora.
   const veredicto = await autorizarRemitente(remitente.phone);
-  if (!veredicto.permitido) return;
+  if (!veredicto.permitido) {
+    entradas.descartados += 1;
+    return;
+  }
+  entradas.autorizados += 1;
 
   // Si el mensaje llego con otro formato (numero local, con signos), la
   // conversacion se guarda bajo el telefono que tiene el usuario en la base.
