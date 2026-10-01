@@ -87,6 +87,15 @@ services:
       REMINDER_TIMEZONE: ${REMINDER_TIMEZONE:-America/Argentina/Buenos_Aires}
 
       LOG_MESSAGES: ${LOG_MESSAGES:-true}
+
+      # --- Presentacion del bot ---
+      # Nombre con el que se presenta. Aparece en el saludo automatico que
+      # recibe quien escribe sin estar autorizado.
+      BOT_NAME: ${BOT_NAME:-}
+      # Saludo para los NO autorizados. Texto fijo: no usa IA ni guarda nada.
+      AUTO_REPLY_MESSAGE: ${AUTO_REPLY_MESSAGE:-}
+      # Cada cuanto se repite ese saludo al mismo numero (horas).
+      AUTO_REPLY_HORAS: ${AUTO_REPLY_HORAS:-24}
       # Puerto interno del servidor (panel + /health). El trafico llega por el
       # proxy inverso; para verlo: docker compose exec orbitaos wget -qO- http://127.0.0.1:3000/health
       PORT: ${PORT:-3000}

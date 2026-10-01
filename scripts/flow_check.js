@@ -242,6 +242,69 @@ check('los logs de whitelist no imprimen el telefono entero', () => {
   // Y el log viejo, que imprimia el id completo, no debe quedar.
   assert.ok(!src.includes('mensaje ignorado de ${msg.from}'));
 });
+check('los no autorizados reciben el saludo fijo, sin IA', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'index.js'), 'utf8');
+  // Es lo que pedia el negocio: que cualquiera escriba y reciba una
+  // presentacion, pero sin que eso cueste un token.
+  assert.ok(src.includes('AUTO_REPLY_MESSAGE'), 'el saludo debe ser configurable');
+  assert.ok(src.includes('Administrador General Chicolin'), 'debe tener el nombre por defecto');
+  const gate = src.indexOf('if (!veredicto.permitido) {');
+  const saludo = src.indexOf('responderSaludoAutomatico(msg, remitente.phone)');
+  assert.ok(gate > 0 && saludo > gate, 'el saludo va en el camino no autorizado');
+  // Y ese camino no guarda ni llama a la IA.
+  const fn = src.indexOf('async function responderSaludoAutomatico');
+  const cuerpo = src.slice(fn, src.indexOf('/**', fn + 40));
+  assert.ok(!cuerpo.includes('ai.route'), 'el saludo no debe llamar a la IA');
+  assert.ok(!cuerpo.includes('persistMessage'), 'el saludo no debe guardar el mensaje');
+  assert.ok(cuerpo.includes('client.sendMessage'), 'el saludo si debe enviarse');
+});
+
+check('el saludo automatico no insiste ni habla en grupos', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'index.js'), 'utf8');
+  const fn = src.indexOf('async function responderSaludoAutomatico');
+  const cuerpo = src.slice(fn, src.indexOf('/**', fn + 40));
+  // Un saludo por ventana de tiempo, no uno por mensaje.
+  assert.ok(src.includes('AUTO_REPLY_HORAS'), 'la ventana debe ser configurable');
+  assert.ok(cuerpo.includes('ultimosSaludos'), 'debe recordar a quien ya saludo');
+  assert.ok(cuerpo.includes('esGrupo'), 'no debe hablar en grupos');
+});
+
+check('solo se saluda a quien no tiene acceso de verdad', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'index.js'), 'utf8');
+  // El bot no se saluda a si mismo, ni un id sin telefono recibe nada.
+  assert.ok(
+    src.includes('veredicto.motivo === whitelist.MOTIVOS.NO_AUTORIZADO'),
+    'solo el motivo no-autorizado dispara el saludo'
+  );
+});
+
+check('hola y gracias se responden sin llamar a la IA', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'index.js'), 'utf8');
+  assert.ok(src.includes('function respuestaLocal'), 'debe existir la respuesta local');
+  const h = src.indexOf('async function handleMessage');
+  const cuerpo = src.slice(h, src.indexOf('/* ====', h));
+  const local = cuerpo.indexOf('respuestaLocal(cleanBody)');
+  const ia = cuerpo.indexOf('await ai.route(');
+  assert.ok(local > 0, 'debe aplicar la respuesta local');
+  assert.ok(local < ia, 'debe aplicarse ANTES de la IA');
+  // Y cubre los mensajes mas frecuentes del dia a dia.
+  const fn = src.indexOf('function respuestaLocal');
+  const cuerpo2 = src.slice(fn, src.indexOf('/**', fn + 20));
+  for (const caso of ['SALUDOS', 'AGRADECIMIENTOS', 'CONFIRMACIONES']) {
+    assert.ok(cuerpo2.includes(caso), `debe cubrir ${caso}`);
+  }
+});
+
+check('la presentacion del bot se configura por entorno', () => {
+  const yml = fs.readFileSync(path.join(__dirname, '..', 'docker-compose.yml'), 'utf8');
+  assert.ok(yml.includes('BOT_NAME:'), 'el compose debe pasar BOT_NAME');
+  assert.ok(yml.includes('AUTO_REPLY_MESSAGE:'), 'el compose debe pasar el saludo');
+  assert.ok(yml.includes('AUTO_REPLY_HORAS:'), 'el compose debe pasar la ventana');
+  const env = fs.readFileSync(path.join(__dirname, '..', '.env.example'), 'utf8');
+  assert.ok(env.includes('BOT_NAME='), 'el .env.example debe documentarla');
+  assert.ok(env.includes('AUTO_REPLY_MESSAGE='), 'el .env.example debe documentarla');
+});
+
 check('un estado de WhatsApp no es una conversacion', () => {
   const wl = require('../src/whitelist');
   // Los estados llegan como status@broadcast: al normalizar quedan vacios.

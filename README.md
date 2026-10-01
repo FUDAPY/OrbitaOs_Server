@@ -817,6 +817,45 @@ línea por imagen:
 La regla general es la misma en todos los caminos: **solo entra lo que viene de
 un teléfono con acceso**. Todo lo demás se descarta antes de gastar un token.
 
+### Quién recibe respuesta y qué paga tokens
+
+| Quién escribe | Qué pasa | Tokens de IA |
+|---|---|---|
+| Teléfono **autorizado** | Se guarda el mensaje y se responde con el asistente | 1, solo si hace falta |
+| Teléfono **no autorizado** | Recibe el saludo fijo. El mensaje no se guarda | **0** |
+| El bot mismo | Nada | 0 |
+| Estados, canales, difusiones | Nada, ni log por mensaje | 0 |
+
+El saludo de los no autorizados es un texto fijo, configurable:
+
+```
+Hola, soy Administrador General Chicolin, en que puedo ayudarle,
+en breve le estaremos respondiendo
+```
+
+Se manda **una sola vez por número** cada `AUTO_REPLY_HORAS` (24 por defecto),
+para no insistir si la persona insiste, y nunca en grupos.
+
+Variables:
+
+| Variable | Por defecto | Para qué |
+|---|---|---|
+| `BOT_NAME` | `Administrador General Chicolin` | Nombre con el que se presenta |
+| `AUTO_REPLY_MESSAGE` | el saludo de arriba | Texto exacto del saludo |
+| `AUTO_REPLY_HORAS` | `24` | Ventana entre saludos al mismo número |
+
+#### La IA se usa solo cuando hace falta
+
+Incluso con un número autorizado hay mensajes que no necesitan un modelo, y
+son los más frecuentes del día a día. Esos se resuelven con reglas locales,
+en **0 tokens**: `hola`, `buenas`, `gracias`, `ok`, `perfecto`, `entendido` y
+similares. Lo mismo pasa con los comandos (`/agenda`, `/tareas`, `/estado`) y
+con el formulario guiado de tareas.
+
+Al modelo solo llega lo que de verdad necesita entenderse: una consulta, un
+pedido, una frase con contexto. En los logs aparece `[wa] respuesta local
+(sin IA)` cuando se cortó antes.
+
 ### Lista blanca
 
 ```bash

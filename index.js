@@ -21,6 +21,23 @@ const { User, Message, Event, Task } = db;
 
 const LOG_MESSAGES = (process.env.LOG_MESSAGES || 'true') === 'true';
 
+// Nombre con el que se presenta el bot. Aparece en el saludo automatico.
+const BOT_NAME = process.env.BOT_NAME || 'Administrador General Chicolin';
+
+// Saludo que recibe quien escribe sin estar autorizado. NO pasa por la IA:
+// es un texto fijo, asi que no cuesta ni un token.
+const AUTO_REPLY = (
+  process.env.AUTO_REPLY_MESSAGE ||
+  `Hola, soy ${BOT_NAME}, en que puedo ayudarle, en breve le estaremos respondiendo`
+).trim();
+
+// Cada cuanto se repite ese saludo al mismo numero. Sin esto, quien escribe
+// cinco veces recibiría el saludo cinco veces.
+const AUTO_REPLY_MS = Number(process.env.AUTO_REPLY_HORAS || 24) * 3600 * 1000;
+
+/** Ultimo saludo automatico enviado por telefono. */
+const ultimosSaludos = new Map();
+
 /**
  * Contadores de mensajes entrantes. Se publican en /api/estado para poder
  * distinguir las dos fallas que se ven igual desde afuera: que el evento de
@@ -68,6 +85,62 @@ async function autorizarRemitente(senderId) {
 /** Normaliza un numero de WhatsApp a solo digitos, sin el @c.us ni el pais agregado. */
 function normalizePhone(id) {
   return whitelist.normalizePhone(id);
+}
+
+/**
+ * Saludo para quien escribe sin estar autorizado.
+ *
+ * Es un texto fijo: no consulta la base, no llama a la IA y no guarda el
+ * mensaje. Se manda una sola vez por numero dentro de la ventana de
+ * AUTO_REPLY_MS, para no insistir si la persona insiste.
+ */
+async function responderSaludoAutomatico(msg, phone) {
+  // En un grupo no se habla salvo que lo invoquen: el saludo automatico es
+  // para chats privados.
+  if (whitelist.esGrupo(msg.from)) return false;
+
+  const ahora = Date.now();
+  const ultimo = ultimosSaludos.get(phone) || 0;
+  if (ahora - ultimo < AUTO_REPLY_MS) return false;
+  ultimosSaludos.set(phone, ahora);
+
+  try {
+    await client.sendMessage(msg.from, AUTO_REPLY);
+    console.log(
+      `[wa] saludo automatico enviado a ${whitelist.enmascarar(phone)} (sin IA, sin guardar)`
+    );
+    return true;
+  } catch (err) {
+    console.error(`[wa] no se pudo enviar el saludo automatico: ${err.message}`);
+    ultimosSaludos.delete(phone); // se reintenta en el proximo mensaje
+    return false;
+  }
+}
+
+/**
+ * Respuestas locales para los autorizados, sin llamar a la IA.
+ *
+ * "solo cuando sea necesario" significa tambien no gastar un token en un
+ * hola o en un gracias: son los mensajes mas frecuentes y no requieren
+ * pensar nada. Devuelve null cuando el texto si necesita del modelo.
+ */
+const SALUDOS = /^(hola|holis|buenas|buen dia|buenas tardes|buenas noches|hey|ola|que tal|hello|hi|buenissss?)+[!. ]*$/i;
+const AGRADECIMIENTOS = /^(gracias|muchas gracias|mil gracias|dale gracias|ok gracias|thanks|thank you)+[!. ]*$/i;
+const CONFIRMACIONES = /^(ok|oka|dale|listo|perfecto|entendido|hecho|si|claro|joya|buenisimo|barbaro|excellent)[!. ]*$/i;
+
+function respuestaLocal(body) {
+  const texto = String(body || '').trim();
+  if (!texto || texto.length > 60) return null;
+  if (SALUDOS.test(texto)) {
+    return `¡Hola! Soy ${BOT_NAME}. ¿En qué te ayudo?`;
+  }
+  if (AGRADECIMIENTOS.test(texto)) {
+    return '¡De nada! Cualquier cosa avisame.';
+  }
+  if (CONFIRMACIONES.test(texto)) {
+    return 'Perfecto. Quedo atento.';
+  }
+  return null;
 }
 
 /** Numeros de la variable WHITELIST (respaldo / carga inicial). */
@@ -746,12 +819,17 @@ async function handleMessage(msg) {
   const remitente = await resolverRemitente(msg);
   if (!remitente.phone) return;
 
-  // --- Lista blanca: nadie mas es atendido ---
-  // Va antes de guardar el mensaje y antes de llamar a la IA: lo que no esta
-  // autorizado no existe para el bot ni para la bitacora.
+  // --- Lista blanca: solo los autorizados ---
+  // Va antes de guardar el mensaje y antes de llamar a la IA. Lo que no esta
+  // autorizado no entra al pipeline: se le manda el saludo fijo y listo.
   const veredicto = await autorizarRemitente(remitente.phone);
   if (!veredicto.permitido) {
     entradas.descartados += 1;
+    // El bot no se saluda a si mismo, y los que no tienen remitente no
+    // reciben nada: solo se saluda a quien si tiene un telefono real.
+    if (veredicto.motivo === whitelist.MOTIVOS.NO_AUTORIZADO) {
+      await responderSaludoAutomatico(msg, remitente.phone);
+    }
     return;
   }
   entradas.autorizados += 1;
@@ -849,6 +927,17 @@ async function handleMessage(msg) {
   if (!reply && taskFlow.detectarIntencion(cleanBody)) {
     const flujo = taskFlow.iniciar(chatId);
     reply = taskFlow.saludoInicial(flujo);
+  }
+
+  // 2d) Saludos, agradecimientos y confirmaciones: se resuelven con reglas
+  //     locales. Son los mensajes mas frecuentes y no necesitan un modelo, asi
+  //     que responderlos por aqui es lo que hace que la IA se use "solo cuando
+  //     es necesario".
+  if (!reply) {
+    reply = respuestaLocal(cleanBody);
+    if (reply) {
+      console.log('[wa] respuesta local (sin IA)');
+    }
   }
 
   // 3) Sin comando: la IA decide la intencion.
