@@ -1009,17 +1009,43 @@ check('el arranque espera a que la sesion se anuncie', () => {
   const cuerpo = src.slice(init, src.indexOf('main().catch', init));
   const posInit = cuerpo.indexOf('await client.initialize();');
   const posEspera = cuerpo.indexOf('esperarVinculacion(15000)');
-  const posPide = cuerpo.indexOf('requestPairingCode(BOT_PHONE)');
+  const posPagina = cuerpo.indexOf('esperarPaginaQr(90000)');
+  const posPide = cuerpo.indexOf('pedirCodigoDeEmparejamiento()');
   assert.ok(init > 0, 'debe existir el arranque');
   assert.ok(posInit >= 0 && posEspera > posInit, 'debe esperar despues de initialize');
-  assert.ok(posPide > posEspera, 'debe esperar antes de pedir el codigo');
+  assert.ok(posPide > posEspera, 'debe esperar la sesion antes de pedir el codigo');
+  // La pagina tiene que existir antes de pedir el codigo, o la llamada expira.
+  assert.ok(posPagina > 0 && posPagina < posPide, 'debe esperar la pagina antes del codigo');
   assert.ok(cuerpo.includes('if (wantsPairing && !yaVinculado)'), 'el gate se mantiene');
 });
 
 check('una llamada colgada al navegador no frena el arranque', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'index.js'), 'utf8');
   assert.ok(src.includes('conTope'), 'debe haber un tope para las llamadas');
-  assert.ok(src.includes('requestPairingCode(BOT_PHONE)'), 'debe seguir pidiendo el codigo');
+  assert.ok(src.includes('pedirCodigoDeEmparejamiento'), 'debe pedir el codigo con reintentos');
+});
+
+check('si el codigo no sale, el QR queda como salida', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'index.js'), 'utf8');
+  // Con BOT_PHONE el QR estaba oculto: si el codigo fallaba, no habia ninguna
+  // forma de vincular. Ahora se muestra una sola vez como respaldo.
+  const h = src.indexOf("client.on('qr'");
+  assert.ok(h > 0, 'debe seguir escuchando el QR');
+  const cuerpo = src.slice(h, src.indexOf('});', h));
+  assert.ok(cuerpo.includes('qrAvisado'), 'solo una vez');
+  // El QR tiene que imprimirse SIEMPRE, este definido BOT_PHONE o no: antes
+  // el bloque de BOT_PHONE hacia return y el QR quedaba oculto.
+  const ramaBot = cuerpo.indexOf('if (BOT_PHONE)');
+  const imprime = cuerpo.indexOf('qrcode.generate');
+  assert.ok(ramaBot > 0, 'debe distinguir si hay BOT_PHONE');
+  assert.ok(imprime > ramaBot, 'el QR se imprime fuera de la rama de BOT_PHONE');
+  // Y debe avisar que pedir el codigo tiene reintentos.
+  const fn = src.indexOf('async function pedirCodigoDeEmparejamiento');
+  const cuerpo2 = src.slice(fn, src.indexOf('async function initializeWithRecovery'));
+  assert.ok(cuerpo2.includes('intentos'), 'debe reintentar');
+  assert.ok(cuerpo2.includes('QR'), 'debe explicar la salida alternativa');
+  assert.ok(cuerpo2.includes('requestPairingCode'), 'debe pedir el codigo');
+  assert.ok(cuerpo2.includes('dormir('), 'debe esperar entre intentos');
 });
 
 check('un error interno de la libreria no tumba el bot', () => {

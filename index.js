@@ -174,6 +174,12 @@ let codigosEmitidos = 0;
  */
 let sesionVinculada = false;
 
+/** true cuando WhatsApp Web ya mostro su QR de vinculación. */
+let qrVisto = false;
+
+/** Resuelve la espera de la pagina, cuando llega el QR. */
+let resolverQr = null;
+
 // Elimina los locks de Chromium de una ejecucion anterior.
 function clearChromiumLocks() {
   // LocalAuth compone el directorio asi: dataPath + "session-" + clientId.
@@ -1048,23 +1054,29 @@ function registerClientEvents() {
     }
   });
 
-  // --- Respaldo: QR por consola, para cuando no hay BOT_PHONE definido ---
+  // --- QR: forma de vincular. Con BOT_PHONE el codigo es lo preferido, pero
+  // el QR se muestra igual una sola vez: si el codigo no llega, es la unica
+  // forma de salir adelante. Solo se imprime una vez porque WhatsApp lo
+  // renueva cada ~20 s y llenaria los logs de ruido.
   let qrAvisado = false;
   client.on('qr', (qr) => {
+    qrVisto = true;
+    if (resolverQr) resolverQr();
+    if (qrAvisado) return;
+    qrAvisado = true;
+
+    console.log('');
     if (BOT_PHONE) {
-      // Con BOT_PHONE definido llega QR pero no se usa. WhatsApp lo renueva
-      // cada ~20 s y llenaba los logs de ruido: se avisa una sola vez.
-      if (!qrAvisado) {
-        console.log('[wa] El navegador pidió un QR, pero BOT_PHONE está definido:');
-        console.log('[wa] se usa el código de emparejamiento de arriba.');
-        qrAvisado = true;
-      }
-      return;
+      console.log('[wa] El navegador muestra un QR de vinculación.');
+      console.log('[wa] Es el respaldo: preferimos el código de emparejamiento, pero si');
+      console.log('[wa] no aparece o no funciona, escaneá este QR con WhatsApp >');
+      console.log('[wa] Dispositivos vinculados.');
+    } else {
+      console.log('[wa] Escanea este QR con WhatsApp > Dispositivos vinculados:');
+      console.log('[wa] (si querés un código en vez de QR, definí BOT_PHONE en el entorno)');
     }
-    console.log('\n[wa] Escanea este QR con WhatsApp > Dispositivos vinculados:');
     qrcode.generate(qr, { small: true }, (code) => console.log(code));
-    console.log('\n[wa] Si no podés escanear el QR, definí BOT_PHONE en el entorno');
-    console.log('[wa] para obtener un código de 8 caracteres en su lugar.\n');
+    console.log('');
   });
 
   client.on('authenticated', () => {
@@ -1155,11 +1167,8 @@ async function reiniciarCliente(motivo) {
     // Si de verdad no hay sesion (recien desvinculado), se pide el codigo.
     const yaVinculado = await esperarVinculacion(20000);
     if (!yaVinculado && BOT_PHONE) {
-      await conTope(
-        client.requestPairingCode(BOT_PHONE),
-        60000,
-        'el navegador no respondio'
-      );
+      await esperarPaginaQr(90000);
+      await pedirCodigoDeEmparejamiento();
     }
   } catch (err) {
     console.error(`[wa] fallo el reinicio del cliente: ${err.message}`);
@@ -1362,6 +1371,66 @@ function esperarVinculacion(ms) {
   });
 }
 
+/** Espera un tiempo. */
+function dormir(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Espera a que la pagina de WhatsApp Web este cargada y muestre el QR.
+ *
+ * Importa: pedir el codigo de emparejamiento antes de que la pagina exista
+ * hace que la llamada al navegador se quede esperando y expire, que es
+ * exactamente lo que pasaba en produccion ("no se pudo pedir el codigo").
+ */
+function esperarPaginaQr(ms) {
+  if (qrVisto) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    let listo = false;
+    const terminar = (valor) => {
+      if (listo) return;
+      listo = true;
+      clearTimeout(temporizador);
+      resolverQr = null;
+      resolve(valor);
+    };
+    resolverQr = () => terminar(true);
+    const temporizador = setTimeout(() => terminar(false), ms);
+    client.once('qr', () => terminar(true));
+    client.once('authenticated', () => terminar(true));
+  });
+}
+
+/**
+ * Pide el codigo de emparejamiento, con reintentos.
+ *
+ * Si despues de todo no se obtiene, no se deja al usuario sin salida: se
+ * muestra el QR en los logs, que sigue siendo una forma valida de vincular.
+ */
+async function pedirCodigoDeEmparejamiento(intentos = 3) {
+  for (let i = 1; i <= intentos; i += 1) {
+    try {
+      await conTope(
+        client.requestPairingCode(BOT_PHONE),
+        90000,
+        'el navegador no respondio'
+      );
+      return true;
+    } catch (err) {
+      console.error(
+        `[wa] no se pudo pedir el codigo (intento ${i} de ${intentos}): ${err.message}`
+      );
+      if (i < intentos) await dormir(10000);
+    }
+  }
+
+  console.error('[wa] No se pudo obtener el codigo de emparejamiento.');
+  console.error('[wa] Usá el QR de los logs para vincular (ver arriba), o revisá que');
+  console.error('[wa] BOT_PHONE tenga el prefijo del pais y el navegador tenga memoria.');
+  console.error(`[wa] También podés ver el estado desde el panel: GET /api/estado`);
+  return false;
+}
+
 // Arranca Chromium y, si falla por un perfil bloqueado o corrupto, lo destruye y reintenta una vez.
 async function initializeWithRecovery() {
   // Si hay BOT_PHONE se pide emparejamiento con codigo, que es lo unico
@@ -1396,17 +1465,14 @@ async function initializeWithRecovery() {
       // guardada, pedir un codigo es innecesario y peligroso: la llamada al
       // navegador se queda esperando y deja WhatsApp Web colgado.
       if (wantsPairing && !yaVinculado) {
-        // Con tope: si el navegador esta colgado, esta llamada se queda
-        // esperando varios minutos. Se abandona en vez de frenar el arranque.
-        try {
-          await conTope(
-            client.requestPairingCode(BOT_PHONE),
-            60000,
-            'el navegador no respondio'
-          );
-        } catch (err) {
-          console.error(`[wa] no se pudo pedir el codigo: ${err.message}`);
+        // Primero se espera a que la pagina exista: pedir el codigo apenas abre
+        // el navegador hace que la llamada expire sin llegar a WhatsApp.
+        console.log('[app] no hay sesion: esperando la pagina de WhatsApp Web...');
+        const pagina = await esperarPaginaQr(90000);
+        if (!pagina) {
+          console.warn('[wa] la pagina no dio señales a tiempo: se intenta igual.');
         }
+        await pedirCodigoDeEmparejamiento();
       } else if (wantsPairing) {
         console.log('[wa] sesion ya vinculada: no se pide codigo de emparejamiento.');
       }
