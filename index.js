@@ -1054,29 +1054,26 @@ function registerClientEvents() {
     }
   });
 
-  // --- QR: forma de vincular. Con BOT_PHONE el codigo es lo preferido, pero
-  // el QR se muestra igual una sola vez: si el codigo no llega, es la unica
-  // forma de salir adelante. Solo se imprime una vez porque WhatsApp lo
-  // renueva cada ~20 s y llenaria los logs de ruido.
+  // --- QR: solo cuando NO hay BOT_PHONE definido ---
+  // Con BOT_PHONE el emparejamiento es por código de 8 caracteres, que es lo
+  // único útil en un servidor sin monitor. WhatsApp renueva el QR cada ~20 s,
+  // así que si se imprimiera llenaría los logs de ruido: se descarta.
   let qrAvisado = false;
   client.on('qr', (qr) => {
     qrVisto = true;
     if (resolverQr) resolverQr();
-    if (qrAvisado) return;
-    qrAvisado = true;
-
-    console.log('');
     if (BOT_PHONE) {
-      console.log('[wa] El navegador muestra un QR de vinculación.');
-      console.log('[wa] Es el respaldo: preferimos el código de emparejamiento, pero si');
-      console.log('[wa] no aparece o no funciona, escaneá este QR con WhatsApp >');
-      console.log('[wa] Dispositivos vinculados.');
-    } else {
-      console.log('[wa] Escanea este QR con WhatsApp > Dispositivos vinculados:');
-      console.log('[wa] (si querés un código en vez de QR, definí BOT_PHONE en el entorno)');
+      if (!qrAvisado) {
+        console.log('[wa] El navegador pidió un QR, pero BOT_PHONE está definido:');
+        console.log('[wa] se usa el código de emparejamiento de arriba.');
+        qrAvisado = true;
+      }
+      return;
     }
+    console.log('\n[wa] Escanea este QR con WhatsApp > Dispositivos vinculados:');
     qrcode.generate(qr, { small: true }, (code) => console.log(code));
-    console.log('');
+    console.log('\n[wa] Si no podés escanear el QR, definí BOT_PHONE en el entorno');
+    console.log('[wa] para obtener un código de 8 caracteres en su lugar.\n');
   });
 
   client.on('authenticated', () => {
@@ -1425,9 +1422,10 @@ async function pedirCodigoDeEmparejamiento(intentos = 3) {
   }
 
   console.error('[wa] No se pudo obtener el codigo de emparejamiento.');
-  console.error('[wa] Usá el QR de los logs para vincular (ver arriba), o revisá que');
-  console.error('[wa] BOT_PHONE tenga el prefijo del pais y el navegador tenga memoria.');
-  console.error(`[wa] También podés ver el estado desde el panel: GET /api/estado`);
+  console.error('[wa] Revisá que BOT_PHONE tenga el prefijo del pais y solo digitos,');
+  console.error(`[wa] por ejemplo 595981234567 y nada más.`);
+  console.error('[wa] El codigo tambien se puede ver desde el panel, en GET /api/estado');
+  console.error('[wa] (campo codigo_vinculacion), con la sesion abierta.');
   return false;
 }
 
