@@ -18,6 +18,7 @@
     "check:users": "node scripts/users_check.js",
     "check:whitelist": "node scripts/whitelist_check.js",
     "check:whitelist:flow": "node scripts/whitelist_flow_check.js",
+    "patch:whatsapp": "node scripts/patch_whatsapp.js",
     "user": "node scripts/user.js",
     "whitelist": "node scripts/whitelist.js",
     "reset:session": "node scripts/reset_session.js",

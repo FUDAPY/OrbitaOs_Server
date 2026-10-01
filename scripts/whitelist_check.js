@@ -267,11 +267,13 @@ check('la lista blanca se consulta antes de guardar el mensaje', () => {
   const fs = require('fs');
   const path = require('path');
   const src = fs.readFileSync(path.join(__dirname, '..', 'index.js'), 'utf8');
-  const gate = src.indexOf('autorizarRemitente(remitente.phone)');
-  const corte = src.indexOf('entradas.descartados += 1;');
-  // La definicion de persistMessage esta antes en el archivo: se busca la
-  // llamada, que es la que importa, despues del gate.
-  const guardar = src.indexOf('await persistMessage({', corte);
+  // Solo el cuerpo de handleMessage: la funcion autorizarRemitente, mas arriba,
+  // tiene un if parecida que no es el gate.
+  const h = src.indexOf('async function handleMessage');
+  const cuerpo = src.slice(h, src.indexOf('/* ====', h));
+  const gate = cuerpo.indexOf('autorizarRemitente(remitente.phone)');
+  const corte = cuerpo.indexOf('if (!veredicto.permitido) {');
+  const guardar = cuerpo.indexOf('await persistMessage({');
   assert.ok(gate > 0 && corte > gate, 'el gate debe existir y cortar');
   assert.ok(guardar > corte, 'no debe guardar antes de autorizar');
 });

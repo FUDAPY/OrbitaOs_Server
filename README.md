@@ -799,6 +799,24 @@ En los logs:
 [wa] CODIGO DE EMPAREJAMIENTO: ABCD1234
 ```
 
+#### Los estados no son conversaciones
+
+Los estados de WhatsApp llegan como `status@broadcast`, sin remitente real: al
+normalizar quedan en cadena vacía. Antes el bot intentaba "resolver" ese
+remitente consultando la ficha del contacto, y con eso cada foto o video de un
+estado podía terminar entrando al pipeline y gastando una llamada a la IA.
+
+Ahora se cortan al principio de `handleMessage`, **antes** de tocar la base, la
+ficha del contacto o la IA, y solo se avisa una vez por tipo en vez de una
+línea por imagen:
+
+```
+[wa] estados/difusiones de WhatsApp ignorados (no son conversaciones)
+```
+
+La regla general es la misma en todos los caminos: **solo entra lo que viene de
+un teléfono con acceso**. Todo lo demás se descarta antes de gastar un token.
+
 ### Lista blanca
 
 ```bash
@@ -1051,6 +1069,8 @@ npm run check:e2e
 | El bot está listo pero no llega ningún mensaje | La sesión quedó colgada o el número vinculado no es `BOT_PHONE` | Ver `numero vinculado:` en el arranque y `entradas` en `/api/estado` |
 | `no se pudo pedir el codigo: ... timed out` | La sesión quedó colgada pidiendo un código que no hacía falta | Estado ya corregido; si reaparece, limpiar el volumen `session-data` |
 | `window['onQRChangedEvent'] already exists!` y el proceso muere | Se cerró sesión desde el celular y la librería reinyectó sobre la página vieja | Estado ya corregido: se reconstruye el navegador en vez de morir |
+| `canCheckStatusRankingPosterGating is not a function` | Incompatibilidad de whatsapp-web.js con el WhatsApp Web actual | Se corrige sola: el parche se aplica al arrancar y en el build (`npm run patch:whatsapp`) |
+| El consumo de IA se dispara solo | Entraron estados de WhatsApp al pipeline | Estado ya corregido: los estados y difusiones se cortan antes de tocar la IA |
 | La URL muestra JSON y no una página | Es `/` sin sesión o `/` del servidor de diagnóstico | Abrir el panel en `/` e iniciar sesión; el estado JSON está en `/` con sesión o en `/health` |
 
 ### El código de vinculación no vincula

@@ -73,12 +73,23 @@ function esGrupo(id) {
   return /@g\.us$/i.test(String(id || ''));
 }
 
-/**
- * true si el id es un "@lid": el identificador opaco de un dispositivo
- * vinculado. NO es el telefono, asi que hay que resolverlo antes de comparar.
- */
+/** true si el id es un "@lid": el identificador opaco de un dispositivo
+ *  vinculado. NO es el telefono, asi que hay que resolverlo antes de comparar. */
 function esLid(id) {
   return /@lid$/i.test(String(id || ''));
+}
+
+/**
+ * true si el id es una difusion y no una conversacion: los estados de
+ * WhatsApp ("status@broadcast") y los canales o newsletters.
+ *
+ * Importa porque no tienen un remitente real: al normalizar quedan en cadena
+ * vacia y antes se intentaba resolver el contacto, con lo cual cada foto o
+ * video de un estado podia terminar entrando al pipeline y gastando una
+ * llamada a la IA.
+ */
+function esDifusion(id) {
+  return /@(broadcast|newsletter)$/i.test(String(id || ''));
 }
 
 /** Quien mando el mensaje: en grupos es msg.author, no el id del grupo. */
@@ -141,6 +152,7 @@ module.exports = {
   MOTIVOS,
   MIN_DIGITOS_COLA,
   TIPOS_DE_SISTEMA,
+  esDifusion,
   authorize: autorizar,
   autorizar,
   enmascarar,

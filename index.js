@@ -293,6 +293,14 @@ async function resolverRemitente(msg) {
     return { phone: directo, senderId };
   }
 
+  // Un id @lid es opaco pero tiene contacto: ahi si vale la pena preguntarle.
+  // Cualquier otro id sin digitos NO es un remitente (por ejemplo un estado o
+  // un canal que llego hasta aca). Inventar un telefono ahi es justamente lo
+  // que dejo entrar difusiones al pipeline.
+  if (!whitelist.esLid(senderId)) {
+    return { phone: directo, senderId };
+  }
+
   try {
     const contacto = await msg.getContact();
     const numero = normalizePhone(contacto && contacto.number);
@@ -301,14 +309,11 @@ async function resolverRemitente(msg) {
     console.warn(`[wa] no se pudo resolver el contacto ${whitelist.enmascarar(directo)}: ${err.message}`);
   }
 
-  // Sin numero confiable: si venia un id @lid no se inventa nada, se descarta.
-  if (whitelist.esLid(senderId)) {
-    console.warn(
-      `[whitelist] remitente ${whitelist.enmascarar(directo)} sin telefono resoluble (@lid)`
-    );
-    return { phone: '', senderId };
-  }
-  return { phone: directo, senderId };
+  // Sin numero confiable no se inventa nada: se descarta.
+  console.warn(
+    `[whitelist] remitente ${whitelist.enmascarar(directo)} sin telefono resoluble (@lid)`
+  );
+  return { phone: '', senderId };
 }
 
 /** Devuelve el usuario, creandolo la primera vez. */
@@ -671,10 +676,41 @@ async function commandListContacts() {
  * Orquestacion de mensajes
  * ====================================================================== */
 
+/**
+ * Lineas ya avisadas, para no repetirlas miles de veces. Los estados de un
+ * contacto generan cientos de eventos por minuto y, sin esto, el log del
+ * contenedor queda inutilizable y tapa lo que de verdad importa.
+ */
+const avisados = new Set();
+
+/** Loguea una sola vez por clave. Devuelve true si la imprimio. */
+function avisarUnaVez(clave, texto) {
+  if (avisados.has(clave)) return false;
+  avisados.add(clave);
+  console.log(texto);
+  return true;
+}
+
 // Procesa un mensaje entrante: valida, persiste, enruta a la IA y responde.
 async function handleMessage(msg) {
   const isGroup = whitelist.esGrupo(msg.from);
   const body = (msg.body || '').trim();
+  const remitenteId = whitelist.remitenteDe(msg);
+
+  // --- Estados y difusiones: NO son conversaciones ---
+  // Los estados de WhatsApp llegan como "status@broadcast", sin remitente real:
+  // al normalizar quedan en cadena vacia. Antes se intentaba resolver el
+  // contacto y asi cada foto o video de un estado podia terminar entrando al
+  // pipeline y gastando una llamada a la IA. Se cortan aca, antes de tocar la
+  // base, la ficha del contacto o la IA.
+  if (whitelist.esDifusion(remitenteId) || whitelist.esDifusion(msg.from)) {
+    entradas.descartados += 1;
+    avisarUnaVez(
+      'difusion',
+      '[wa] estados/difusiones de WhatsApp ignorados (no son conversaciones)'
+    );
+    return;
+  }
 
   // Traza de ENTRADA, antes de cualquier filtro. Sin esto no se puede saber si
   // un mensaje que no genera respuesta llego y se descarto, o si nunca llego
@@ -693,7 +729,13 @@ async function handleMessage(msg) {
   // Ignora estados (read, delivered) y mensajes de sistema: solo se atiende
   // el chat de texto, en privado y en grupo.
   if (!isGroup && msg.type !== 'chat') {
-    console.log(`[wa] evento descartado: tipo=${msg.type} (solo se atiende texto)`);
+    // Se resume: una linea por tipo, no una por foto o video.
+    avisarUnaVez(
+      `tipo-${msg.type}`,
+      `[wa] eventos de tipo ${msg.type} descartados (solo se atiende texto). ` +
+      'Contados en entradas.descartados.'
+    );
+    entradas.descartados += 1;
     return;
   }
 
@@ -1068,6 +1110,16 @@ async function main() {
   if (!uri) {
     console.error('[app] falta la variable MONGO_URI');
     process.exit(1);
+  }
+
+  // Se aplica antes de levantar el cliente: whatsapp-web.js inyecta estos
+  // archivos en el navegador, asi que el parche tiene que estar en disco ya.
+  // Es idempotente, y si la libreria no esta instalada (por ejemplo en las
+  // pruebas) no molesta.
+  try {
+    require('./scripts/patch_whatsapp');
+  } catch (err) {
+    console.warn(`[wa] no se pudo aplicar el parche de whatsapp-web.js: ${err.message}`);
   }
 
   console.log('[app] conectando a MongoDB...');

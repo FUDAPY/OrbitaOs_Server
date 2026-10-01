@@ -51,6 +51,11 @@ COPY package.json ./
 RUN npm install --omit=dev --no-audit --no-fund \
     && npm cache clean --force
 
+# El envio de mensajes se rompe con el WhatsApp Web actual (ver el script).
+# El parche es idempotente, asi que corre en cada build sin riesgo.
+COPY scripts/patch_whatsapp.js ./scripts/patch_whatsapp.js
+RUN node scripts/patch_whatsapp.js
+
 COPY . .
 
 # gosu baja privilegios sin usar su, para que Node quede bien como hijo.

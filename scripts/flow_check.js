@@ -223,7 +223,7 @@ check('la lista blanca se resuelve por el remitente real', () => {
 
 check('el gate va antes de guardar y antes de la IA', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'index.js'), 'utf8');
-  const corte = src.indexOf('entradas.descartados += 1;');
+  const corte = src.indexOf('if (!veredicto.permitido) {');
   assert.ok(corte > 0, 'debe cortar cuando no esta autorizado');
   assert.ok(
     src.indexOf('await persistMessage({', corte) > corte,
@@ -242,6 +242,67 @@ check('los logs de whitelist no imprimen el telefono entero', () => {
   // Y el log viejo, que imprimia el id completo, no debe quedar.
   assert.ok(!src.includes('mensaje ignorado de ${msg.from}'));
 });
+check('un estado de WhatsApp no es una conversacion', () => {
+  const wl = require('../src/whitelist');
+  // Los estados llegan como status@broadcast: al normalizar quedan vacios.
+  assert.strictEqual(wl.normalizePhone('status@broadcast'), '');
+  assert.strictEqual(wl.esDifusion('status@broadcast'), true);
+  assert.strictEqual(wl.esDifusion('1234567890@newsletter'), true);
+  assert.strictEqual(wl.esDifusion('595981234567@c.us'), false);
+  assert.strictEqual(wl.esDifusion('595981234567@lid'), false);
+});
+
+check('los estados de WhatsApp se cortan antes de todo', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'index.js'), 'utf8');
+  const fn = src.indexOf('async function handleMessage');
+  assert.ok(fn > 0, 'debe existir handleMessage');
+  const cuerpo = src.slice(fn, src.indexOf('/* ====', fn));
+  // El corte va antes de resolver el contacto, la base y la IA: si se deja
+  // para mas tarde, cada foto o video de un estado consume una llamada.
+  const corte = cuerpo.indexOf('esDifusion');
+  assert.ok(corte > 0, 'debe cortar las difusiones');
+  assert.ok(cuerpo.indexOf('persistMessage') > corte, 'antes de guardar');
+  assert.ok(cuerpo.indexOf('ai.route') > corte, 'antes de llamar a la IA');
+  assert.ok(cuerpo.indexOf('resolverRemitente') > corte, 'antes de resolver el contacto');
+});
+
+check('no se inventa un telefono a un remitente que no lo tiene', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'index.js'), 'utf8');
+  const fn = src.indexOf('async function resolverRemitente');
+  const cuerpo = src.slice(fn, src.indexOf('getOrCreateUser', fn));
+  // Consultar la ficha del contacto tiene sentido para un @lid, que es opaco
+  // pero real. Para un id sin digitos, inventar un telefono es lo que dejo
+  // entrar los estados al pipeline.
+  const lid = cuerpo.indexOf('if (!whitelist.esLid(senderId))');
+  const contacto = cuerpo.indexOf('msg.getContact()');
+  assert.ok(lid > 0, 'debe cortar los ids que no son @lid');
+  assert.ok(contacto > lid, 'solo consulta el contacto para un @lid');
+});
+
+check('los descartes repetidos no inundan el log', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'index.js'), 'utf8');
+  assert.ok(src.includes('avisarUnaVez'), 'debe existir el aviso unico');
+  const fn = src.indexOf('async function handleMessage');
+  const cuerpo = src.slice(fn, src.indexOf('/* ====', fn));
+  assert.ok(cuerpo.includes('avisarUnaVez'), 'los descartes deben resumirse');
+});
+
+check('el parche de envio de whatsapp-web.js esta disponible', () => {
+  const ruta = path.join(__dirname, '..', 'scripts', 'patch_whatsapp.js');
+  assert.ok(fs.existsSync(ruta), 'debe existir el script de parche');
+  const src = fs.readFileSync(ruta, 'utf8');
+  // Sin esto el bot recibe y guarda, pero no puede responder.
+  assert.ok(src.includes('canCheckStatusRankingPosterGating'), 'debe cubrir el fallo conocido');
+  assert.ok(src.includes('const isStatus'), 'debe corregir la deteccion de estado');
+  // Idempotente: se ejecuta en cada arranque y en cada build.
+  assert.ok(src.includes('if (src.includes(parche.nuevo)) continue;'), 'debe ser idempotente');
+  // Y tiene que estar enganchado al arranque y a la imagen.
+  const app = fs.readFileSync(path.join(__dirname, '..', 'index.js'), 'utf8');
+  assert.ok(app.includes("require('./scripts/patch_whatsapp')"), 'debe correr al arrancar');
+  const df = fs.readFileSync(path.join(__dirname, '..', 'Dockerfile'), 'utf8');
+  assert.ok(df.includes('node scripts/patch_whatsapp.js'), 'debe correr en el build');
+});
+
 check('todo mensaje entrante deja rastro antes de filtrarse', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'index.js'), 'utf8');
   // La traza de entrada tiene que ir antes del primer corte, o un mensaje que
