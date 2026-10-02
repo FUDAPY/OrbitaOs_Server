@@ -54,6 +54,13 @@ services:
       # Tope diario de llamadas a la IA (0 = sin limite; al alcanzarlo se usan
       # las reglas locales).
       SPACE_BUNNY_DAILY_CAP: ${SPACE_BUNNY_DAILY_CAP:-0}
+      # Reintentos ante fallos transitorios del proveedor y circuito para no
+      # insistir contra Space Bunny cuando esta caido.
+      AI_RETRY_INTENTOS: ${AI_RETRY_INTENTOS:-3}
+      AI_RETRY_BASE_MS: ${AI_RETRY_BASE_MS:-800}
+      AI_RETRY_MAX_MS: ${AI_RETRY_MAX_MS:-8000}
+      AI_CIRCUITO_FALLOS: ${AI_CIRCUITO_FALLOS:-4}
+      AI_CIRCUITO_MS: ${AI_CIRCUITO_MS:-60000}
 
       # --- Seguridad / usuarios ---
       # La lista blanca es opcional: el acceso real vive en la base de datos y

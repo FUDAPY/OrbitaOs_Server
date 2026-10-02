@@ -2,6 +2,69 @@
 // OrbitaOs - enrutador de intencion hacia Space Bunny Alpha.
 
 const web = require('./web_search');
+const retry = require('./ai_retry');
+
+/** Espera un tiempo. */
+function dormir(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+// Circuito de proteccion: tras varios fallos seguidos contra el proveedor se
+// deja de insistir durante un rato. Sin esto, con el proveedor caido cada
+// mensaje hacia 3 reintentos con esperas y el usuario recibia la respuesta
+// varios segundos tarde, siempre mock.
+//
+// No es un corte seco: mientras esta abierto pasa UNA sonda por ventana. Si el
+// proveedor se recuperó, la sonda lo detecta y todos vuelven a la normalidad; si
+// sigue caido, la ventana se correza para el proximo intento.
+const circuito = { fallos: 0, hasta: 0, sondaHecha: false };
+
+function umbralFallos() {
+  return Number(process.env.AI_CIRCUITO_FALLOS || 4);
+}
+function ventanaCircuito() {
+  return Number(process.env.AI_CIRCUITO_MS || 60000);
+}
+function circuitoAbierto() {
+  return Date.now() < circuito.hasta;
+}
+
+/** Decide si se puede llamar: con el circuito abierto, solo una sonda por
+ *  ventana, y solo al empezar la peticion. Si la sonda se permitiera tambien
+ *  en los reintentos, el corte no cortaria nada.
+ */
+function puedeLlamar(esPrimerIntento) {
+  if (!circuitoAbierto()) return true;
+  if (circuito.sondaHecha || !esPrimerIntento) return false;
+  circuito.sondaHecha = true;
+  console.warn('[ai_router] circuito abierto: se prueba si el proveedor revivio');
+  return true;
+}
+
+function marcarFallo() {
+  circuito.fallos += 1;
+  if (circuito.fallos >= umbralFallos()) {
+    circuito.hasta = Date.now() + ventanaCircuito();
+    circuito.sondaHecha = false;
+    console.warn(
+      `[ai_router] proveedor sin responder: se omiten llamadas durante ` +
+      `${Math.round(ventanaCircuito() / 1000)} s (${circuito.fallos} fallos seguidos)`
+    );
+    circuito.fallos = 0;
+  }
+}
+function marcarExito() {
+  circuito.fallos = 0;
+  circuito.hasta = 0;
+  circuito.sondaHecha = false;
+}
+
+/** Reinicia el circuito. Lo usan las pruebas para partir siempre de cero. */
+function reiniciarCircuito() {
+  circuito.fallos = 0;
+  circuito.hasta = 0;
+  circuito.sondaHecha = false;
+}
 
 const MOCK_FLAG = '__MOCK__';
 
@@ -529,6 +592,8 @@ const stats = {
   llamadas: 0,
   ok: 0,
   errores: 0,
+  reintentos: 0,
+  omitidas: 0,
   tokensPrompt: 0,
   tokensCompletion: 0,
   desde: new Date().toISOString(),
@@ -559,6 +624,8 @@ function getUsage() {
     llamadas: stats.llamadas,
     ok: stats.ok,
     errores: stats.errores,
+    reintentos: stats.reintentos,
+    omitidas: stats.omitidas,
     tokens_prompt: stats.tokensPrompt,
     tokens_completion: stats.tokensCompletion,
     tokens_total: stats.tokensPrompt + stats.tokensCompletion,
@@ -587,6 +654,9 @@ function normalize(raw) {
 
   const out = { intent, response_text: String(responseText), data };
   if (raw && raw[MOCK_FLAG]) out.mock = true;
+  // El motivo del fallo se conserva: sin esto se perdia al reconstruir el
+  // objeto y quien lo lee (registro, panel) recibia siempre undefined.
+  if (raw && raw.fallback_reason) out.fallback_reason = String(raw.fallback_reason);
   return out;
 }
 
@@ -708,40 +778,106 @@ async function route(userMessage, options = {}) {
   const conHerramientas = webHabilitada();
   const timeoutMs = Number(process.env.SPACE_BUNNY_TIMEOUT_MS || 30000);
 
-  /** Ejecuta una llamada a la API de Space Bunny Alpha. */
+  /** Ejecuta una llamada a la API de Space Bunny Alpha.
+   *
+   * Reintenta cuando el fallo es transitorio. El caso real era un
+   * "Upstream error: Provider returned an empty response": la misma llamada
+   * un segundo despues funcionaba, pero con un solo intento el bot caia a
+   * respuestas mock sin intentar nada mas.
+   */
   const llamar = async (msgs, forzarJson) => {
-    const controller = new AbortController();
-    const t = setTimeout(() => controller.abort(), timeoutMs);
-    try {
-      const cuerpo = {
-        model: process.env.SPACE_BUNNY_MODEL || 'space-bunny-alpha',
-        messages: msgs,
-        temperature: Number(process.env.SPACE_BUNNY_TEMPERATURE || 0.2),
-        max_tokens: Number(process.env.SPACE_BUNNY_MAX_TOKENS || 4096),
-      };
-      // El formato JSON y las herramientas son excluyentes: el protocolo de
-      // tool calling no admite forzar response_format y tools a la vez.
-      if (forzarJson) cuerpo.response_format = { type: 'json_object' };
-      if (conHerramientas && !forzarJson) cuerpo.tools = HERRAMIENTAS;
+    const total = retry.intentosTotales();
+    let ultimoError = null;
 
-      const res = await fetch(apiUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify(cuerpo),
-        signal: controller.signal,
-      });
-
-      if (!res.ok) {
-        const detail = await res.text().catch(() => '');
-        throw new Error(`Space Bunny ${res.status}: ${detail.slice(0, 200)}`);
+    for (let intento = 0; intento < total; intento += 1) {
+      // El circuito evita insistir contra un proveedor caido. Se mira antes de
+      // CADA intento: con el corte abierto, un mensaje nuevo pasaria igual a
+      // golpear el proveedor y el usuario seguiria esperando la respuesta.
+      if (!puedeLlamar(intento === 0)) {
+        stats.omitidas += 1;
+        throw ultimoError || new Error('Space Bunny no responde, se omite la llamada');
       }
-      return await res.json();
-    } finally {
-      clearTimeout(t);
+      if (intento > 0) {
+        const ms = retry.espera(intento - 1);
+        console.warn(`[ai_router] reintento ${intento + 1}/${total} en ${ms} ms`);
+        stats.reintentos += 1;
+        await dormir(ms);
+      }
+
+      const controller = new AbortController();
+      const t = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        const cuerpo = {
+          model: process.env.SPACE_BUNNY_MODEL || 'space-bunny-alpha',
+          messages: msgs,
+          temperature: Number(process.env.SPACE_BUNNY_TEMPERATURE || 0.2),
+          max_tokens: Number(process.env.SPACE_BUNNY_MAX_TOKENS || 4096),
+        };
+        // El formato JSON y las herramientas son excluyentes: el protocolo de
+        // tool calling no admite forzar response_format y tools a la vez.
+        if (forzarJson) cuerpo.response_format = { type: 'json_object' };
+        if (conHerramientas && !forzarJson) cuerpo.tools = HERRAMIENTAS;
+
+        const res = await fetch(apiUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${apiKey}`,
+          },
+          body: JSON.stringify(cuerpo),
+          signal: controller.signal,
+        });
+
+        if (!res.ok) {
+          const detail = await res.text().catch(() => '');
+          const err = new Error(`Space Bunny ${res.status}: ${detail.slice(0, 200)}`);
+          err.status = res.status;
+          err.detalle = detail;
+          ultimoError = err;
+
+          if (intento + 1 < total && retry.esReintentable(res.status, detail)) {
+            console.warn(
+              `[ai_router] fallo transitorio (${res.status}), reintentando: ` +
+              `${detail.slice(0, 120)}`
+            );
+            marcarFallo();
+            continue;
+          }
+          // Se lanza y lo resuelve el catch: el fallo se cuenta UNA sola vez.
+          throw err;
+        }
+
+        // El cuerpo puede venir malformado: tambien es transitorio.
+        try {
+          const datos = await res.json();
+          marcarExito();
+          return datos;
+        } catch (err) {
+          ultimoError = new Error('Space Bunny devolvio una respuesta ilegible');
+          if (intento + 1 < total) {
+            console.warn('[ai_router] respuesta ilegible, reintentando');
+            marcarFallo();
+            continue;
+          }
+          throw ultimoError;
+        }
+      } catch (err) {
+        if (err.name === 'AbortError') {
+          ultimoError = new Error(`Space Bunny tardo mas de ${timeoutMs} ms`);
+        } else if (ultimoError !== err && !err.status) {
+          ultimoError = err;
+        }
+        const final = ultimoError || err;
+        // Un 4xx definitivo (401, 400 comun) no se reintenta: sale directo.
+        if (!retry.esReintentable(err.status, err.detalle) || intento + 1 >= total) {
+          marcarFallo();
+          throw final;
+        }
+      } finally {
+        clearTimeout(t);
+      }
     }
+    throw ultimoError || new Error('Space Bunny no respondio');
   };
 
   try {
@@ -828,6 +964,7 @@ module.exports = {
   buildSystemPrompt,
   momentoActual,
   aplicarMensajesPredeterminados,
+  reiniciarCircuito,
   informado,
   HERRAMIENTAS,
   ejecutarHerramientas,
