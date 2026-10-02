@@ -16,6 +16,7 @@ const users = require('./src/users');
 const whitelist = require('./src/whitelist');
 const health = require('./src/health_server');
 const taskFlow = require('./src/task_flow');
+const inyeccion = require('./src/inyeccion');
 
 const { User, Message, Event, Task } = db;
 
@@ -38,6 +39,12 @@ const AUTO_REPLY_MS = Number(process.env.AUTO_REPLY_HORAS || 24) * 3600 * 1000;
 /** Ultimo saludo automatico enviado por telefono. */
 const ultimosSaludos = new Map();
 
+// Respuesta a un intento de manipular el modelo. No explica que se detecto
+// (asi no se enseña que filtro hay) ni filtra nada del sistema.
+const INYECCION_MSG =
+  'Ese mensaje no lo puedo interpretar como consulta. Puedo ayudarte a agendar, ' +
+  'cargar tareas o responder consultas de la operacion.';
+
 /**
  * Contadores de mensajes entrantes. Se publican en /api/estado para poder
  * distinguir las dos fallas que se ven igual desde afuera: que el evento de
@@ -47,6 +54,7 @@ const entradas = {
   recibidos: 0,
   autorizados: 0,
   descartados: 0,
+  inyecciones: 0,
   ultimo_tipo: null,
   ultimo_recibido: null,
 };
@@ -935,7 +943,19 @@ async function handleMessage(msg) {
     reply = taskFlow.saludoInicial(flujo);
   }
 
-  // 2d) Saludos, agradecimientos y confirmaciones: se resuelven con reglas
+  // 2d) Intentos de manipular al modelo. No llegan a la IA: no gastan token y
+  //     quedan registrados para que el operador vea que alguien esta probando.
+  if (!reply && inyeccion.debeBloquear(cleanBody)) {
+    const hallazgo = inyeccion.detectar(cleanBody);
+    entradas.inyecciones = (entradas.inyecciones || 0) + 1;
+    console.warn(
+      `[seguridad] intento de manipular al modelo (${hallazgo.regla}) desde ` +
+      `${whitelist.enmascarar(phone)}: ${hallazgo.motivo}`
+    );
+    reply = INYECCION_MSG;
+  }
+
+  // 2e) Saludos, agradecimientos y confirmaciones: se resuelven con reglas
   //     locales. Son los mensajes mas frecuentes y no necesitan un modelo, asi
   //     que responderlos por aqui es lo que hace que la IA se use "solo cuando
   //     es necesario".

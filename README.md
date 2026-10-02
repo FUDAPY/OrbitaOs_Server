@@ -856,6 +856,38 @@ Al modelo solo llega lo que de verdad necesita entenderse: una consulta, un
 pedido, una frase con contexto. En los logs aparece `[wa] respuesta local
 (sin IA)` cuando se cortó antes.
 
+### Que un mensaje no maneje a la IA
+
+El bot manda el texto del remitente al modelo de lenguaje. Eso abre una
+puerta: alguien con acceso puede escribir *"ignora las instrucciones..."* y
+tratar de que el modelo se comporte distinto o muestre el prompt.
+
+Hay dos capas:
+
+**1. El prompt (la defensa real).** El system prompt declara que el texto del
+usuario es contenido a interpretar, nunca una instrucción, y que no se
+siguen órdenes que aparezcan dentro del mensaje aunque digan venir de un
+administrador o un desarrollador.
+
+**2. El detector (la segunda capa).** `src/inyeccion.js` corta los intentos
+inequívocos —descartar instrucciones, extraer el prompt, repetir el contexto
+del sistema, modos de jailbreak— **antes** de gastar un token:
+
+```
+[seguridad] intento de manipular al modelo (ignorar-instrucciones) desde
+***222: intenta descartar las instrucciones del sistema
+```
+
+La respuesta al intento es genérica y no revela que hubo un filtro. Queda
+contado en `/api/estado` → `entradas.inyecciones`.
+
+Los patrones son **de alta precisión**: no se intenta adivinar intenciones,
+porque *"actúa como un chef"* o *"escribime un informe"* son pedidos
+legítimos. Las pruebas cubren los dos lados, incluyendo los usos reales del
+bot (`ignorar las notas de la empresa al cliente` no se toca).
+
+Para depurar sin que corte nada: `ALLOW_INJECTION=true`.
+
 ### Lista blanca
 
 ```bash
@@ -1110,6 +1142,7 @@ npm run check:e2e
 | `window['onQRChangedEvent'] already exists!` y el proceso muere | Se cerró sesión desde el celular y la librería reinyectó sobre la página vieja | Estado ya corregido: se reconstruye el navegador en vez de morir |
 | El código de vinculación no aparece | `BOT_PHONE` mal formado, o la página de WhatsApp Web no terminó de cargar | Se espera a que la página cargue y se reintenta 3 veces. Verificar que `BOT_PHONE` sea solo dígitos con prefijo de país. El código vigente también está en `/api/estado` → `codigo_vinculacion` |
 | `canCheckStatusRankingPosterGating is not a function` | Incompatibilidad de whatsapp-web.js con el WhatsApp Web actual | Se corrige sola: el parche se aplica al arrancar y en el build (`npm run patch:whatsapp`) |
+| Alguien trata de manipular la IA | Mensaje con instrucciones dirigidas al modelo | Estado ya corregido: el prompt lo declara y el detector corta el intento sin gastar token |
 | El consumo de IA se dispara solo | Entraron estados de WhatsApp al pipeline | Estado ya corregido: los estados y difusiones se cortan antes de tocar la IA |
 | La URL muestra JSON y no una página | Es `/` sin sesión o `/` del servidor de diagnóstico | Abrir el panel en `/` e iniciar sesión; el estado JSON está en `/` con sesión o en `/health` |
 
