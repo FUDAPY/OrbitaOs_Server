@@ -888,7 +888,47 @@ bot (`ignorar las notas de la empresa al cliente` no se toca).
 
 Para depurar sin que corte nada: `ALLOW_INJECTION=true`.
 
-### Lista blanca
+### La barra lateral
+
+La navegación vive en una **lateral fija a la izquierda** y ya no hay barra
+superior. El contenido se corre con `margin-left` igual al ancho de la lateral
+(declarado en la variable `--lateral-ancho`), que es lo que evita que quede
+oculto detrás del menú.
+
+Cada sección lleva su icono, definido una sola vez como símbolo SVG en el
+propio HTML: no hay fuentes de iconos externas ni peticiones extra.
+
+```
+┌───────────────┬────────────────────────────────────┐
+│ OrbitaOs      │  Panel                              │
+│               │  ┌────────┐ ┌────────┐ ┌────────┐   │
+│ ▣ Panel       │  │        │ │        │ │        │   │
+│ ▤ Calendario  │  └────────┘ └────────┘ └────────┘   │
+│ ▥ Tablero     │                                     │
+│ ▦ Mensajes    │  Próximos eventos                   │
+│ ▧ Contactos   │  ─────────────────────────────────  │
+│ ▨ Usuarios    │  Tablero de un vistazo              │
+│ ▩ Programados │                                     │
+│ ▪ Consumo     │                                     │
+│               │                                     │
+│ ───────────── │                                     │
+│ Ana · owner   │                                     │
+│ [    Salir   ] │                                     │
+└───────────────┴────────────────────────────────────┘
+```
+
+**En el celular** la lateral se convierte en un cajón: botón de menú arriba a
+la izquierda, tapa oscura para cerrar, y se cierra solo al elegir una sección.
+El contenido pasa a ocupar todo el ancho.
+
+Accesibilidad: la sección activa se marca con `aria-current="page"`, el botón de
+menú declara su estado con `aria-expanded`, y Escape cierra el menú.
+
+Las pruebas (`npm run check:panel`) vigilan lo que más se rompe en un sidebar:
+que el contenido quede tapado, que el menú sea inútil en el celular y que la
+navegación deje de cambiar de vista.
+
+### La lista blanca de WhatsApp
 
 ```bash
 npm run whitelist -- list

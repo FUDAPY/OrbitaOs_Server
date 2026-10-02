@@ -188,10 +188,34 @@ const CARGADORES = {
   consumo: cargarConsumo,
 };
 
+/** Abre o cierra el menu lateral (solo importa en pantallas angostas). */
+function alternarMenu(abrir) {
+  const lateral = $('#lateral');
+  const boton = $('#menu-movil');
+  const tapa = $('#tapa-menu');
+  if (!lateral || !boton) return;
+
+  const ahora = abrir === undefined ? !lateral.classList.contains('abierta') : abrir;
+  lateral.classList.toggle('abierta', ahora);
+  boton.setAttribute('aria-expanded', ahora ? 'true' : 'false');
+  // La tapa solo existe en movil, y arranca oculta por el atributo del HTML.
+  if (tapa) tapa.classList.toggle('oculto', !ahora || window.innerWidth > 900);
+  document.body.style.overflow = ahora && window.innerWidth <= 900 ? 'hidden' : '';
+}
+
 /** Cambia de vista y dispara su carga de datos. */
 function irAVista(nombre) {
-  $$('.pestana').forEach((p) => p.classList.toggle('activa', p.dataset.vista === nombre));
+  $$('.pestana').forEach((p) => {
+    const activa = p.dataset.vista === nombre;
+    p.classList.toggle('activa', activa);
+    // Que unlector de pantalla sepa cual seccion esta abierta.
+    if (activa) p.setAttribute('aria-current', 'page');
+    else p.removeAttribute('aria-current');
+  });
   $$('.vista').forEach((v) => v.classList.toggle('activa', v.id === `vista-${nombre}`));
+
+  // En el celular el menu se cierra al elegir, para no tapar la vista.
+  if (window.innerWidth <= 900) alternarMenu(false);
 
   const cargar = CARGADORES[nombre];
   if (cargar) {
@@ -1477,10 +1501,22 @@ function conectarEventos() {
     mostrarLogin();
   });
 
-  /* --- Pestanas ------------------------------------------------------ */
+  /* --- Navegacion ---------------------------------------------------- */
   $('#pestanas').addEventListener('click', (ev) => {
     const boton = ev.target.closest('.pestana');
     if (boton) irAVista(boton.dataset.vista);
+  });
+
+  // --- Menu lateral en el celular: abrir, cerrar con la tapa y con Escape.
+  $('#menu-movil').addEventListener('click', () => alternarMenu());
+  $('#tapa-menu').addEventListener('click', () => alternarMenu(false));
+  document.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Escape') alternarMenu(false);
+  });
+  // Al pasar a pantalla ancha el menu tiene que quedar cerrado y normal,
+  // porque en escritorio siempre esta visible y la tapa estorbaría.
+  window.addEventListener('resize', () => {
+    if (window.innerWidth > 900) alternarMenu(false);
   });
 
   $$('[data-refrescar]').forEach((boton) => {

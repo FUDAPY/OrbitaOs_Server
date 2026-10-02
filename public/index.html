@@ -11,6 +11,58 @@
 <body>
 
 <!-- =======================================================================
+     Iconos
+     Se definen una sola vez y cada seccion los referencia con <use>. Asi el
+     menu no carga ocho imagenes ni depende de una fuente de iconos externa.
+     ==================================================================== -->
+<svg class="sprite" aria-hidden="true" focusable="false">
+  <symbol id="i-panel" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+          stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="3" y="3" width="7.5" height="7.5" rx="2"/>
+    <rect x="13.5" y="3" width="7.5" height="7.5" rx="2"/>
+    <rect x="3" y="13.5" width="7.5" height="7.5" rx="2"/>
+    <rect x="13.5" y="13.5" width="7.5" height="7.5" rx="2"/>
+  </symbol>
+  <symbol id="i-calendario" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+          stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="3" y="5" width="18" height="16" rx="2.5"/>
+    <path d="M8 3v4M16 3v4M3 10h18"/>
+  </symbol>
+  <symbol id="i-tablero" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+          stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="3" y="4" width="5" height="16" rx="1.6"/>
+    <rect x="9.5" y="4" width="5" height="11" rx="1.6"/>
+    <rect x="16" y="4" width="5" height="7" rx="1.6"/>
+  </symbol>
+  <symbol id="i-mensajes" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+          stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M21 11.5a8 8 0 0 1-8.5 8 9 9 0 0 1-3.9-.9L3 20l1.4-4.6A8 8 0 0 1 4 11.5a8 8 0 0 1 8.5-8 8 8 0 0 1 8.5 8z"/>
+  </symbol>
+  <symbol id="i-contactos" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+          stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="12" cy="8" r="4"/>
+    <path d="M4.5 20.5a7.5 7.5 0 0 1 15 0"/>
+  </symbol>
+  <symbol id="i-usuarios" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+          stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M12 3l8 3v6c0 4.8-3.4 8.2-8 9.5-4.6-1.3-8-4.7-8-9.5V6z"/>
+    <path d="M9 12l2.2 2.2L15.5 10"/>
+  </symbol>
+  <symbol id="i-programados" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+          stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="12" cy="12" r="8.5"/>
+    <path d="M12 7v5.2l3.2 2"/>
+  </symbol>
+  <symbol id="i-consumo" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+          stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M4 20h16"/>
+    <rect x="5" y="11" width="3.5" height="7" rx="1"/>
+    <rect x="10.2" y="7" width="3.5" height="11" rx="1"/>
+    <rect x="15.5" y="13" width="3.5" height="5" rx="1"/>
+  </symbol>
+</svg>
+
+<!-- =======================================================================
      Acceso
      Sin sesion no se pide ningun dato: el historial no se sirve nunca a
      quien no se identifico.
@@ -41,25 +93,62 @@
      Aplicacion
      ==================================================================== -->
 <div id="app" class="oculto">
-  <header class="barra">
-    <div class="marca">Orbita<span>Os</span></div>
+  <!-- Boton del menu, solo en pantallas angostas -->
+  <button id="menu-movil" class="menu-movil" type="button"
+          aria-label="Abrir menú" aria-expanded="false" aria-controls="lateral">
+    <span></span><span></span><span></span>
+  </button>
+  <div id="tapa-menu" class="tapa-menu oculto"></div>
 
-    <nav id="pestanas" class="pestanas">
-      <button class="pestana activa" data-vista="panel">Panel</button>
-      <button class="pestana" data-vista="calendario">Calendario</button>
-      <button class="pestana" data-vista="tablero">Tablero</button>
-      <button class="pestana" data-vista="mensajes">Mensajes</button>
-      <button class="pestana" data-vista="contactos">Contactos</button>
-      <button class="pestana" data-vista="usuarios">Usuarios</button>
-      <button class="pestana" data-vista="programados">Programados</button>
-      <button class="pestana" data-vista="consumo">Consumo</button>
+  <!-- Barra lateral fija: reemplaza a la barra de navegacion superior -->
+  <aside class="lateral" id="lateral">
+    <div class="lateral-cabeza">
+      <div class="marca">Orbita<span>Os</span></div>
+      <p class="lateral-sub">Panel de operaciones</p>
+    </div>
+
+    <nav id="pestanas" class="pestanas" aria-label="Secciones del panel">
+      <button class="pestana activa" data-vista="panel">
+        <svg class="pestana-icono" aria-hidden="true"><use href="#i-panel"></use></svg>
+        <span>Panel</span>
+      </button>
+      <button class="pestana" data-vista="calendario">
+        <svg class="pestana-icono" aria-hidden="true"><use href="#i-calendario"></use></svg>
+        <span>Calendario</span>
+      </button>
+      <button class="pestana" data-vista="tablero">
+        <svg class="pestana-icono" aria-hidden="true"><use href="#i-tablero"></use></svg>
+        <span>Tablero</span>
+      </button>
+      <button class="pestana" data-vista="mensajes">
+        <svg class="pestana-icono" aria-hidden="true"><use href="#i-mensajes"></use></svg>
+        <span>Mensajes</span>
+      </button>
+      <button class="pestana" data-vista="contactos">
+        <svg class="pestana-icono" aria-hidden="true"><use href="#i-contactos"></use></svg>
+        <span>Contactos</span>
+      </button>
+      <button class="pestana" data-vista="usuarios">
+        <svg class="pestana-icono" aria-hidden="true"><use href="#i-usuarios"></use></svg>
+        <span>Usuarios</span>
+      </button>
+      <button class="pestana" data-vista="programados">
+        <svg class="pestana-icono" aria-hidden="true"><use href="#i-programados"></use></svg>
+        <span>Programados</span>
+      </button>
+      <button class="pestana" data-vista="consumo">
+        <svg class="pestana-icono" aria-hidden="true"><use href="#i-consumo"></use></svg>
+        <span>Consumo</span>
+      </button>
     </nav>
 
-    <div class="sesion">
-      <span id="quien-soy" class="quien"></span>
-      <button id="boton-salir" class="boton-suave">Salir</button>
+    <div class="lateral-pie">
+      <div class="sesion">
+        <span id="quien-soy" class="quien"></span>
+      </div>
+      <button id="boton-salir" class="boton-suave boton-ancho">Salir</button>
     </div>
-  </header>
+  </aside>
 
   <main class="contenido">
 
