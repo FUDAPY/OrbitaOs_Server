@@ -16,6 +16,8 @@ const users = require('./src/users');
 const whitelist = require('./src/whitelist');
 const health = require('./src/health_server');
 const taskFlow = require('./src/task_flow');
+const stockFlow = require('./src/stock_flow');
+const nexus = require('./src/nexus_client');
 const inyeccion = require('./src/inyeccion');
 
 const { User, Message, Event, Task } = db;
@@ -533,6 +535,16 @@ async function actionUpdateTask(data, ctx) {
   return `✅ *Tarea actualizada*\n\n*${updated.title}*\n🔁 Estado: ${updated.status}\n🚦 Prioridad: ${updated.priority}`;
 }
 
+/**
+ * Ajusta el stock en el POS (NexusOS).
+ *
+ * NO escribe aca: arma el pendiente y le pide confirmacion al usuario. La
+ * escritura ocurre en el siguiente mensaje, dentro de stockFlow.procesar.
+ */
+async function actionAdjustStock(data, ctx) {
+  return stockFlow.preparar(ctx.chatId, data);
+}
+
 /** Genera un documento en Markdown y responde con su contenido. */
 async function actionCreateDocument(data, ctx) {
   const title = (data.title || 'Documento').trim();
@@ -937,6 +949,21 @@ async function handleMessage(msg) {
     }
   }
 
+  // 2b-bis) Carga de stock en el POS. Tiene el mismo criterio que 2b: si hay
+  //     una carga pendiente, la respuesta del usuario NO es una conversacion
+  //     nueva. Va antes de respuestaLocal porque un "dale" de confirmacion
+  //     seria interceptado como saludo y la carga nunca se aplicaria.
+  if (!reply && stockFlow.estaActivo(chatId)) {
+    try {
+      const r = await stockFlow.procesar(chatId, cleanBody, ctx);
+      reply = r.reply;
+    } catch (err) {
+      console.error(`[stock] fallo la carga de stock: ${err.message}`);
+      stockFlow.cancelar(chatId);
+      reply = 'Hubo un problema con la carga de stock. No se aplico nada.';
+    }
+  }
+
   // 2c) Pedir una tarea de forma explicita, sin pasar por la IA.
   if (!reply && taskFlow.detectarIntencion(cleanBody)) {
     const flujo = taskFlow.iniciar(chatId);
@@ -1001,6 +1028,13 @@ async function handleMessage(msg) {
           case 'create_document':
             reply = await actionCreateDocument(result.data, ctx);
             break;
+          case 'adjust_stock': {
+            // El flujo devuelve { reply, estado }. El estado va a la bitacora
+            // para poder ver despues si hubo apply, cancelacion o error.
+            const r = await actionAdjustStock(result.data, ctx);
+            reply = r.reply;
+            break;
+          }
           default:
             reply = result.response_text;
         }

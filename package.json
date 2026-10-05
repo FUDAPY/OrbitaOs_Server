@@ -10,7 +10,7 @@
   "scripts": {
     "start": "node index.js",
     "dev": "node --watch index.js",
-    "test": "node scripts/smoke.js && node scripts/models_check.js && node scripts/flow_check.js && node scripts/ai_retry_check.js && node scripts/dates_check.js && node scripts/users_check.js && node scripts/whitelist_check.js && node scripts/whitelist_flow_check.js && node scripts/inyeccion_check.js && node scripts/locks_check.js && node scripts/panel_check.js && node scripts/flow_task_check.js && node scripts/health_check.js && node scripts/web_check.js",
+    "test": "node scripts/smoke.js && node scripts/models_check.js && node scripts/flow_check.js && node scripts/ai_retry_check.js && node scripts/dates_check.js && node scripts/users_check.js && node scripts/whitelist_check.js && node scripts/whitelist_flow_check.js && node scripts/inyeccion_check.js && node scripts/locks_check.js && node scripts/panel_check.js && node scripts/flow_task_check.js && node scripts/health_check.js && node scripts/web_check.js && node scripts/nexus_check.js",
     "smoke": "node scripts/smoke.js",
     "check:models": "node scripts/models_check.js",
     "check:flow": "node scripts/flow_check.js",

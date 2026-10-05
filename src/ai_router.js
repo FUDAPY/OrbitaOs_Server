@@ -75,6 +75,7 @@ const INTENTS = [
   'create_document',
   'add_task',
   'update_task',
+  'adjust_stock',
 ];
 
 /**
@@ -192,6 +193,26 @@ function buildSystemPrompt() {
     '   - response_text: Mensaje predeterminado confirmando la actualización (ej: "✅ Tarea actualizada").',
     '   - data: { "task_id": "string", "status": "string" }',
     '',
+    '6. "adjust_stock" (Cargar o descontar stock en el sistema de ventas)',
+    '   - Uso de IA: NO (Solo extracción).',
+    '   - Se dispara con frases como "cargar en stock Pilsen 1 LT 6 unidades",',
+    '     "descontar 3 cocas", "agregar stock de Pilsen", "sacar 2 unidades de X".',
+    '   - response_text: NO lo escribas. El sistema genera el resumen de confirmación.',
+    '     Si falta producto o cantidad, pedilos con el mensaje predeterminado.',
+    '   - data: {',
+    '       "producto": "string (nombre del producto TAL COMO lo escribió el usuario,',
+    '                   sin inventar ni corregir; si no sabe, null)",',
+    '       "cantidad": "número entero > 0. NUNCA en negativo ni con signo +",',
+    '       "modo": "string: \\"agregar\\" (cargar, ingresar, sumo, repongo) |',
+    '               \\"restar\\" (descontar, sacar, bajo, consumo) |',
+    '               \\"establecer\\" (dejar en, poner en, contar)",',
+    '       "sucursal": "string o null (solo si el usuario la menciona)"',
+    '     }',
+    '',
+    '   IMPORTANTE sobre "cantidad": si el usuario dice "6 unidades", la cantidad es 6',
+    '   y el modo es "agregar". Si dice "bajar 2", la cantidad es 2 y el modo es "restar".',
+    '   El signo va SIEMPRE en el modo, nunca en la cantidad.',
+    '',
     'CONTEXTO TEMPORAL:',
     `La fecha y hora actual es: ${ahora.date} - ${ahora.time} (Zona horaria: ${TIMEZONE()}).`,
   ].join('\n');
@@ -229,6 +250,45 @@ function mockRoute(text) {
       status: 'todo',
     };
     result.response_text = 'Tarea registrada en el pipeline.';
+    return result;
+  }
+
+  // --- Cargar o descontar stock en el POS ---
+  // Va antes que "crear documento" y que "agendar": frases como "cargar en
+  // stock" contienen palabras de otros patrones y sin esta precedencia el
+  // mock las mandaria alucinando una cita o un acta.
+  // La cantidad se busca SIEMPRE con signo positivo: el sentido lo define el
+  // modo, nunca el numero.
+  if (/\b(stock|inventario|existencia|existencias)\b/.test(t) || /\b(cargar|descontar|ingresar|rep(?:on|oner|oner)|agregar|sacar)\b[^.]{0,60}\b(unidades|u\b|botellas|vasos|cajas|uds?)\b/.test(t)) {
+    // La cantidad es la que ACOMPAÑA a la unidad ("6 unidades"), no el primer
+    // numero del texto: en "PILSEN 1 LT - 6 unidades" el 1 es parte del nombre.
+    // Si no hay unidad, se toma el ultimo numero, que suele ser la cantidad.
+    const conUnidad = t.match(/(\d{1,6})\s*(?:unidades|uds?|u\b|botellas|vasos|cajas|latas)/);
+    const ultimo = t.match(/(\d{1,6})\s*(?![\d/])[^0-9]*$/);
+    const cantidad = conUnidad || ultimo;
+
+    const modo = /\b(descontar|sacar|bajar|restar|consumo)\b/.test(t)
+      ? 'restar'
+      : /\b(dejar|dejarlo|poner|fijar|contar)\b[\s\S]{0,20}\ben\b/.test(t)
+        ? 'establecer'
+        : 'agregar';
+
+    // Se separa el producto: lo que queda entre el verbo y la cantidad.
+    const solo = t
+      .replace(/^\s*(cargar|descontar|ingresar|agregar|sacar|sumar|restar|poner|dejar)\b\s*(en\s+)?(el\s+)?(stock|inventario)?\s*(de|del)?\s*/i, '')
+      .replace(/\b\d{1,6}\b\s*(unidades|uds?|u\b|botellas|vasos|cajas|latas)?/i, '')
+      .replace(/^[\s\-–—:,.]+|[\s\-–—:,.]+$/g, '')
+      .trim();
+
+    result.intent = 'adjust_stock';
+    result.data = {
+      producto: solo || t,
+      cantidad: cantidad ? Number(cantidad[1]) : null,
+      modo,
+      sucursal: (t.match(/sucursal\s+(.+)$/) || [])[1] || null,
+    };
+    result.response_text =
+      'Entiendo que querés ajustar el stock. Confirmame producto y cantidad.';
     return result;
   }
 

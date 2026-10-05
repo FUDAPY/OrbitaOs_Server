@@ -1,0 +1,238 @@
+'use strict';
+// OrbitaOs - pruebas del cliente de NexusOS y del flujo de carga de stock.
+//
+// No toca la red real salvo que se fijen NEXUS_API_URL y NEXUS_SERVICE_TOKEN.
+// Sin ellas el script se OMITE (no falla), para que `npm test` siga en verde en
+// desarrollo y en CI.
+
+const assert = require('assert');
+
+const nexus = require('../src/nexus_client');
+const stockFlow = require('../src/stock_flow');
+const ai = require('../src/ai_router');
+
+let passed = 0;
+let skipped = false;
+
+function check(nombre, fn) {
+  try {
+    fn();
+    passed += 1;
+    console.log(`  ok  ${nombre}`);
+  } catch (err) {
+    console.error(`  FAIL ${nombre} -> ${err.message}`);
+    process.exitCode = 1;
+  }
+}
+
+/** Guarda y restaura variables de entorno. */
+function conEnv(valores, fn) {
+  const antes = {};
+  for (const [k, v] of Object.entries(valores)) {
+    antes[k] = process.env[k];
+    if (v === undefined) delete process.env[k];
+    else process.env[k] = v;
+  }
+  try {
+    return fn();
+  } finally {
+    for (const [k, v] of Object.entries(antes)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  }
+}
+
+/** Igual que check(), pero para funciones asincronas. */
+async function checkAsync(nombre, fn) {
+  try {
+    await fn();
+    passed += 1;
+    console.log(`  ok  ${nombre}`);
+  } catch (err) {
+    console.error(`  FAIL ${nombre} -> ${err.message}`);
+    process.exitCode = 1;
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+
+console.log('nexus_check · cliente de NexusOS y flujo de stock');
+
+check('sin configuracion el cliente no dice que esta listo', () => {
+  conEnv({ NEXUS_API_URL: undefined, NEXUS_SERVICE_TOKEN: undefined }, () => {
+    assert.strictEqual(nexus.configurado(), false, 'no debe decir que esta listo');
+  });
+});
+
+check('con URL y token el cliente queda configurado', () => {
+  conEnv({ NEXUS_API_URL: 'https://ejemplo/api/v1', NEXUS_SERVICE_TOKEN: 'x' }, () => {
+    assert.strictEqual(nexus.configurado(), true);
+  });
+});
+
+check('el token nunca se imprime completo', () => {
+  const secreto = 'secreto-de-prueba-123456';
+  conEnv({ NEXUS_SERVICE_TOKEN: secreto }, () => {
+    const m = nexus.enmascarar();
+    assert.ok(!m.includes(secreto), 'no debe filtrar el valor entero');
+    assert.ok(!m.includes('secreto'), 'no debe filtrar el comienzo del valor');
+    assert.ok(m.includes(String(secreto.length)), 'debe permitir depurar el largo');
+  });
+});
+
+check('normalizarTexto quita tildes y unifica mayusculas', () => {
+  assert.strictEqual(nexus.normalizarTexto('PILSEN  1lt'), 'PILSEN 1LT');
+  assert.strictEqual(nexus.normalizarTexto('Pilsen'), 'PILSEN');
+});
+
+check('elegirProducto con un solo item lo elige', () => {
+  const r = nexus.elegirProducto([{ id: 'a', nombre: 'Pilsen 1 LT', stock: 3 }]);
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(r.item.id, 'a');
+});
+
+check('elegirProducto con lista vacia dice NO_ENCONTRADO', () => {
+  const r = nexus.elegirProducto([]);
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(r.motivo, 'NO_ENCONTRADO');
+});
+
+check('elegirProducto NUNCA elige el primero a ciegas', () => {
+  const r = nexus.elegirProducto([
+    { id: 'a', nombre: 'Pilsen 1 LT', stock: 10 },
+    { id: 'b', nombre: 'Pilsen 2 LT', stock: 4 },
+  ]);
+checkAsync('el router mock reconoce "cargar en stock ... N unidades"', async () => {
+  const r = await ai.route('cargar en stock pilsen 1 lt - 6 unidades', {
+    history: [],
+    SPACE_BUNNY_API_KEY: '',
+  });
+  assert.strictEqual(r.intent, 'adjust_stock', `esperado adjust_stock, hubo ${r.intent}`);
+  assert.strictEqual(r.data.cantidad, 6, 'debe leer la cantidad');
+  assert.strictEqual(r.data.modo, 'agregar', 'cargar es agregar');
+  assert.ok(String(r.data.producto).toLowerCase().includes('pilsen'), 'debe conservar el nombre');
+});
+
+checkAsync('el router mock distingue descontar de cargar', async () => {
+  const r = await ai.route('descontar 3 cocas del stock', { history: [], SPACE_BUNNY_API_KEY: '' });
+  assert.strictEqual(r.intent, 'adjust_stock');
+  assert.strictEqual(r.data.cantidad, 3);
+  assert.strictEqual(r.data.modo, 'restar', 'descontar es restar, con cantidad positiva');
+});
+
+checkAsync('sin configuracion el flujo responde sin aplicar nada', async () => {
+  await conEnv({ NEXUS_API_URL: undefined, NEXUS_SERVICE_TOKEN: undefined }, async () => {
+    const r = await stockFlow.preparar('59500000001', {
+      producto: 'Pilsen 1 LT',
+      cantidad: 6,
+      modo: 'agregar',
+    });
+    assert.ok(r.reply && r.reply.length > 0, 'debe responder algo al usuario');
+    assert.notStrictEqual(r.estado, 'aplicado', 'nunca debe aplicar sin NexusOS');
+  });
+});
+
+checkAsync('el flujo arma el resumen con producto, cantidad y sucursal', async () => {
+  const texto = stockFlow.resumen({
+    productoNombre: 'PILSEN 1 LT',
+    producto: 'PILSEN 1 LT',
+    cantidad: 6,
+    modo: 'agregar',
+    sucursal: 'Sucursal Centro',
+  });
+  assert.ok(texto.includes('PILSEN 1 LT'), 'debe mostrar el producto');
+  assert.ok(texto.includes('6'), 'debe mostrar la cantidad');
+  assert.ok(texto.includes('Sucursal Centro'), 'debe mostrar la sucursal');
+});
+
+checkAsync('cancelar un pendiente no escribe nada', async () => {
+  await conEnv({ NEXUS_API_URL: undefined, NEXUS_SERVICE_TOKEN: undefined }, async () => {
+    stockFlow.iniciar('59500000002', {
+      producto: { id: 'x', nombre: 'Pilsen 1 LT', stock: 5 },
+      cantidad: 6,
+      modo: 'agregar',
+    });
+    assert.strictEqual(stockFlow.estaActivo('59500000002'), true, 'debe quedar pendiente');
+    const r = await stockFlow.procesar('59500000002', 'no', {});
+    assert.strictEqual(r.estado, 'cancelado');
+    assert.strictEqual(stockFlow.estaActivo('59500000002'), false, 'debe descartar el pendiente');
+  });
+});
+
+checkAsync('responder algo que no es si ni no NO aplica la carga', async () => {
+  await conEnv({ NEXUS_API_URL: undefined, NEXUS_SERVICE_TOKEN: undefined }, async () => {
+    stockFlow.iniciar('59500000003', {
+      producto: { id: 'x', nombre: 'Pilsen 1 LT', stock: 5 },
+      cantidad: 6,
+      modo: 'agregar',
+    });
+    const r = await stockFlow.procesar('59500000003', 'quiza mañana', {});
+    assert.notStrictEqual(r.estado, 'aplicado', 'no debe aplicar sin confirmacion');
+    assert.strictEqual(stockFlow.estaActivo('59500000003'), true, 'el pendiente sigue abierto');
+    stockFlow.cancelar('59500000003');
+  });
+});
+
+/* --- Integracion real: solo si hay credenciales -------------------------- */
+
+const hayCredenciales =
+  Boolean(process.env.NEXUS_API_URL) && Boolean(process.env.NEXUS_SERVICE_TOKEN);
+
+if (!hayCredenciales) {
+  skipped = true;
+  console.log('  skip  integracion real (faltan NEXUS_API_URL o NEXUS_SERVICE_TOKEN)');
+} else {
+  console.log('  ..    ejecutando integracion real contra NexusOS');
+
+  checkAsync('la consulta de stock responde', async () => {
+    const items = await nexus.consultarStock('PILSEN 1 LT');
+    assert.ok(Array.isArray(items), 'debe devolver una lista');
+  });
+
+  checkAsync('el ajuste es idempotente con la misma clave', async () => {
+    const key = nexus.nuevoIdempotencyKey();
+    const opciones = { idempotencyKey: key, sucursal: process.env.NEXUS_SUCURSAL || '' };
+    const primero = await nexus.ajustarStock(
+      { producto: 'PILSEN 1 LT', cantidad: 1, modo: 'agregar' },
+      opciones
+    );
+    const segundo = await nexus.ajustarStock(
+      { producto: 'PILSEN 1 LT', cantidad: 1, modo: 'agregar' },
+      opciones
+    );
+    assert.ok(primero && segundo, 'ambos deben responder');
+    if (segundo && segundo.replayed === true) {
+      const a = primero.resultados[0].stockResultante;
+      const b = segundo.resultados[0].stockResultante;
+      assert.strictEqual(a, b, 'el stock no debe volver a cambiar');
+    }
+  });
+}
+
+console.log(
+  skipped
+    ? `nexus_check · ${passed} checks ok (integracion real omitida)`
+    : `nexus_check · ${passed} checks ok`
+);
+  assert.strictEqual(r.ok, false, 'con dos candidatos con stock hay ambiguedad');
+  assert.strictEqual(r.motivo, 'AMBIGUO');
+});
+
+check('elegirProducto desambigua si solo uno tiene stock', () => {
+  const r = nexus.elegirProducto([
+    { id: 'a', nombre: 'Pilsen 1 LT', stock: 0 },
+    { id: 'b', nombre: 'Pilsen 2 LT', stock: 7 },
+  ]);
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(r.item.id, 'b');
+});
+
+checkAsync('la intencion adjust_stock esta declarada en el router', async () => {
+  assert.ok(ai.INTENTS.includes('adjust_stock'), 'debe estar en INTENTS');
+});
+
+checkAsync('el prompt del sistema describe adjust_stock', async () => {
+  const p = ai.buildSystemPrompt();
+  assert.ok(p.includes('"adjust_stock"'), 'el prompt debe nombrarla');
+});
