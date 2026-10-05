@@ -108,6 +108,16 @@ services:
       PORT: ${PORT:-3000}
       # Busqueda web con DuckDuckGo (sin costo de API).
       WEB_SEARCH_ENABLED: ${WEB_SEARCH_ENABLED:-true}
+      # --- NexusOS (POS / ERP / CRM) ---
+      # Dokploy NO inyecta las variables del Environment en el contenedor por su
+      # cuenta: hay que referenciarlas aca. Sin estas lineas el bot no llega a
+      # NexusOS aunque esten configuradas en la pestana Environment.
+      NEXUS_API_URL: ${NEXUS_API_URL:-}
+      NEXUS_SERVICE_TOKEN: ${NEXUS_SERVICE_TOKEN:-}
+      # Lista de sucursales, separadas por coma. Con mas de una, el bot
+      # pregunta cual usar antes de aplicar la carga.
+      NEXUS_SUCURSALES: ${NEXUS_SUCURSALES:-}
+      NEXUS_TIMEOUT_MS: ${NEXUS_TIMEOUT_MS:-10000}
     # Expuesto solo dentro de la red de Docker: no se publica en el host.
     expose:
       - "3000"

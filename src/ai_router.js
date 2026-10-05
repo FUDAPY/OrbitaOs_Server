@@ -280,12 +280,16 @@ function mockRoute(text) {
       .replace(/^[\s\-–—:,.]+|[\s\-–—:,.]+$/g, '')
       .trim();
 
+    // La sucursal puede venir como nombre suelto ("en chicolin"), no solo con la
+    // palabra "sucursal". Se buscan los alias conocidos en todo el texto.
+    const aliasSucursal = /\b(chicolin|cafeteria|san\s*benito|resto\s*bar)\b/.exec(t);
+
     result.intent = 'adjust_stock';
     result.data = {
       producto: solo || t,
       cantidad: cantidad ? Number(cantidad[1]) : null,
       modo,
-      sucursal: (t.match(/sucursal\s+(.+)$/) || [])[1] || null,
+      sucursal: (t.match(/sucursal\s+(.+)$/) || [])[1] || (aliasSucursal ? aliasSucursal[0] : null),
     };
     result.response_text =
       'Entiendo que querés ajustar el stock. Confirmame producto y cantidad.';

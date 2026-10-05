@@ -146,6 +146,78 @@ function pedirEleccion(chatId, candidatos) {
   return `🤔 Encontré varios productos parecidos:\n\n${opciones}\n\nRespondé con el *número* del que es.`;
 }
 
+/**
+ * Resuelve el nombre que la persona escribe a la sucursal EXACTA que espera
+ * NexusOS.
+ *
+ * No alcanza con comparar strings: nadie escribe "CAFETERIA CHICOLIN" con esa
+ * falta de ortografia y esas mayusculas. Se comparan palabras clave sin
+ * acentos ni mayusculas, y se devuelve el valor oficial de la lista.
+ *
+ * Devuelve '' si no reconoce ninguna: en ese caso hay que preguntar, nunca
+ * adivinar ni mandar un valor inventado que NexusOS no reconoceria.
+ *
+ * @param {string} texto Lo que dijo el usuario.
+ * @returns {string} El valor exacto, o '' si no lo reconoci.
+ */
+function resolverSucursal(texto) {
+  const t = nexus.normalizarTexto(texto);
+  if (!t) return '';
+
+  for (const oficial of nexus.sucursales()) {
+    const n = nexus.normalizarTexto(oficial);
+    // El nombre exacto completo alcanza siempre.
+    if (t.includes(n)) return oficial;
+
+    // Palabras significativas del nombre oficial (>= 4 letras, para que "cafe"
+    // no matchee "cafeteria" por accidente ni al reves).
+    const palabras = n
+      .split(/[^A-Z0-9]+/)
+      .filter((p) => p.length >= 4);
+    if (palabras.length > 0 && palabras.every((p) => t.includes(p))) return oficial;
+  }
+
+  // Alias explicitos para las sucursales conocidas. Se evaluan al final para no
+  // pisar una coincidencia exacta mas fuerte.
+  const ALIAS = [
+    [/CHICOLIN|CAFETERIA/, 'CAFETERIA CHICOLIN'],
+    [/SAN\s*BENITO/, 'San Benito Cafe Resto Bar'],
+  ];
+  for (const [re, oficial] of ALIAS) {
+    if (re.test(t)) {
+      // Solo se acepta si la sucursal esta realmente en la lista configurada:
+      // si no esta, no se inventa el valor.
+      const lista = nexus.sucursales();
+      const coincide = lista.find(
+        (s) => nexus.normalizarTexto(s) === nexus.normalizarTexto(oficial)
+      );
+      if (coincide) return coincide;
+    }
+  }
+  return '';
+}
+
+/** Indica si una sucursal es una de las configuradas. */
+function sucursalValida(valor) {
+  const n = nexus.normalizarTexto(valor);
+  if (!n) return false;
+  return nexus.sucursales().some((s) => nexus.normalizarTexto(s) === n);
+}
+
+/** Pide elegir la sucursal antes de tocar el stock. */
+function pedirSucursal(chatId, datos) {
+  const lista = nexus.sucursales();
+  flujos.set(chatId, {
+    chatId,
+    esperandoSucursal: true,
+    sucursales: lista,
+    pendiente: datos,
+    ultimo: Date.now(),
+  });
+  const opciones = lista.map((s, i) => `${i + 1}. ${limpiar(s)}`).join('\n');
+  return `🏪 ¿En qué sucursal?\n\n${opciones}\n\nRespondé con el *número*.`;
+}
+
 /** Saca el formato de WhatsApp de un numero de opcion ("2", "2.", "la 2"). */
 function opcionElegida(texto, total) {
   const t = String(texto || '').trim();
@@ -170,6 +242,30 @@ async function procesar(chatId, body, ctx = {}) {
 
   const texto = String(body || '').trim();
   flujo.ultimo = Date.now();
+
+  // --- El usuario estaba eligiendo sucursal ---
+  if (flujo.esperandoSucursal) {
+    if (CANCELAR.test(texto)) {
+      flujos.delete(chatId);
+      return { reply: 'Cancelado. No se cargo nada.', estado: 'cancelado' };
+    }
+    const n = opcionElegida(texto, flujo.sucursales.length);
+    if (n === null) {
+      // Tambien acepta el nombre escrito: "en chicolin" vale igual que "2".
+      const directa = resolverSucursal(texto);
+      if (!directa) {
+        return {
+          reply: 'No reconocí la sucursal. Respondé con el *número* de la lista, o *no* para cancelar.',
+          estado: 'sucursal-invalida',
+        };
+      }
+      return resolverProducto(chatId, { ...flujo.pendiente, sucursal: directa });
+    }
+    return resolverProducto(chatId, {
+      ...flujo.pendiente,
+      sucursal: flujo.sucursales[n - 1],
+    });
+  }
 
   // --- El usuario estaba eligiendo entre candidatos ---
   if (flujo.esperandoEleccion) {
@@ -210,7 +306,13 @@ async function procesar(chatId, body, ctx = {}) {
   }
 
   // --- Confirmado: recien ahora se escribe ---
-  const sucursal = flujo.sucursal || process.env.NEXUS_SUCURSAL || '';
+  // Se valida contra la lista antes de salir a la red: mandar un valor que
+  // NexusOS no reconoce romperia el movimiento entero.
+  const sucursal = flujo.sucursal || '';
+  if (!sucursal || !sucursalValida(sucursal)) {
+    flujos.delete(chatId);
+    return { reply: mensajeDeError('SUCURSAL_REQUERIDA'), estado: 'sucursal-invalida' };
+  }
   try {
     const data = await nexus.ajustarStock(
       {
@@ -276,7 +378,41 @@ async function preparar(chatId, data) {
     return { reply: 'No me dijiste qué producto cargar.', estado: 'error' };
   }
 
-  const sucursal = (data && data.sucursal) || process.env.NEXUS_SUCURSAL || '';
+  // La sucursal puede venir del mensaje ("en San Benito") o de la lista de
+  // variables. Si no viene ninguna y hay MAS DE UNA configurada, se pregunta:
+  // cargar en la sucursal equivocada no se nota hasta el conteo.
+  const listaSucursales = nexus.sucursales();
+  // Se resuelve SIEMPRE contra la lista configurada, aunque la IA haya dicho
+  // una: manda el valor oficial, no el que interpreto el modelo. Y se busca en
+  // todo el mensaje, asi "en chicolin" funciona aunque la IA dejo la sucursal
+  // en null.
+  const sucursal = resolverSucursal(`${(data && data.sucursal) || ''} ${texto}`);
+
+  if (!sucursal && listaSucursales.length > 0) {
+    return {
+      reply: pedirSucursal(chatId, {
+        producto: texto,
+        cantidad,
+        modo: (data && data.modo) || 'agregar',
+      }),
+      estado: 'eligiendo-sucursal',
+    };
+  }
+
+  return resolverProducto(chatId, { producto: texto, cantidad, modo: data && data.modo, sucursal });
+}
+
+/**
+ * Busca el producto en el catalogo y deja el pendiente listo para confirmar.
+ * Se separa de `preparar` porque tambien se vuelve a llamar cuando el usuario
+ * ya eligio la sucursal.
+ */
+async function resolverProducto(chatId, datos) {
+  const texto = String(datos.producto || '').trim();
+  const cantidad = Math.abs(Number(datos.cantidad));
+  const modo = datos.modo || 'agregar';
+  const sucursal = datos.sucursal || '';
+
   let items;
   try {
     items = await nexus.consultarStock(texto, { sucursal });
@@ -299,7 +435,7 @@ async function preparar(chatId, data) {
       esperandoEleccion: true,
       candidatos: eleccion.candidatos,
       candidatosCantidad: cantidad,
-      candidatosModo: (data && data.modo) || 'agregar',
+      candidatosModo: modo,
       sucursal,
       ultimo: Date.now(),
     });
@@ -309,7 +445,7 @@ async function preparar(chatId, data) {
   const pendiente = iniciar(chatId, {
     producto: eleccion.item,
     cantidad,
-    modo: (data && data.modo) || 'agregar',
+    modo,
     sucursal,
   });
   return { reply: resumen(pendiente), estado: 'confirmacion' };
@@ -322,7 +458,10 @@ module.exports = {
   obtener,
   procesar,
   preparar,
+  resolverProducto,
   resumen,
+  resolverSucursal,
+  sucursalValida,
   mensajeDeError,
   CONFIRMAR,
   CANCELAR,

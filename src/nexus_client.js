@@ -46,6 +46,24 @@ function timeoutMs() {
 }
 
 /**
+ * Lista de sucursales configuradas, en el orden en que se declararon.
+ *
+ * Con una sola, el bot la usa sin preguntar. Con varias tiene que preguntar:
+ * cargar en la sucursal equivocada es un error que nadie detecta hasta el
+ * conteo de stock.
+ *
+ * Acepta tambien NEXUS_SUCURSAL (singular) por compatibilidad con
+ * despliegues anteriores.
+ */
+function sucursales() {
+  const lista = String(process.env.NEXUS_SUCURSALES || process.env.NEXUS_SUCURSAL || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return [...new Set(lista)];
+}
+
+/**
  * Nombre seguro del token para logs. Muestra solo si hay token y nunca el valor:
  * "sb1…(52)" alcanza para depurar sin exponer el secreto.
  */
@@ -237,6 +255,7 @@ module.exports = {
   CODIGOS,
   configurado,
   enmascarar,
+  sucursales,
   normalizarTexto,
   nuevoIdempotencyKey,
   consultarStock,

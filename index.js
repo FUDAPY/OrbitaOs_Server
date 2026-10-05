@@ -405,27 +405,31 @@ async function resolverRemitente(msg) {
   return { phone: '', senderId };
 }
 
-/** Devuelve el usuario, creandolo la primera vez. */
+/**
+ * Devuelve el usuario ya registrado. NO crea ninguno.
+ *
+ * Antes esta funcion daba de alta en caliente a quien escribia con un numero
+ * que estuviera en la lista blanca pero sin ficha. Eso era una puerta abierta:
+ * bastaba con que un numero quedara en WHITELIST por cualquier motivo para
+ * obtener acceso completo sin que nadie lo autorizara.
+ *
+ * Ahora el registro es explicito: el usuario tiene que existir en la base, dado
+ * de alta por un admin (panel o /agregar) o por el script de gestion. Si no
+ * existe, se devuelve un perfil vacio SOLO de lectura, para que el bot pueda
+ * seguir respondiendo sin inventar permisos.
+ */
 async function getOrCreateUser(phone) {
   const clean = normalizePhone(phone);
   // Busca por variantes, no por coincidencia exacta: si el telefono esta
-  // guardado con otro formato no se debe crear un usuario duplicado.
-  let user = await users.findByPhone(clean);
+  // guardado con otro formato no se debe tomar un registro equivocado.
+  const user = await users.findByPhone(clean);
+
   if (!user) {
-    try {
-      user = await User.create({
-        username: `wa${clean}`,
-        passwordHash: 'sin-acceso-por-whatsapp',
-        phone: clean,
-        name: '',
-        allowed: true,
-      });
-      user = user.toObject();
-    } catch (err) {
-      console.error(`[db] no se pudo crear el usuario: ${err.message}`);
-      user = { phone: clean, timezone: 'America/Asuncion', name: '' };
-    }
+    // Perfil de solo lectura. `allowed: false` es deliberado: aunque este
+    // objeto llegue a alguna otra capa, no habilita acceso por si solo.
+    return { phone: clean, timezone: 'America/Asuncion', name: '', role: 'member', allowed: false };
   }
+
   User.updateOne({ phone: clean }, { $set: { lastSeenAt: new Date() } }).catch(() => {});
   return user;
 }
@@ -597,8 +601,10 @@ const HELP_TEXT = [
   '/tarea — dar de alta una tarea paso a paso (sin gastar IA)',
   '/estado — diagnostico del sistema',
   '/contactos — la lista blanca',
-  '/agregar <numero> <nombre> — autoriza a alguien',
+  '/agregar <numero> <nombre> [rol] — autoriza a alguien',
   '/quitar <numero> — revoca el acceso',
+  '',
+  'Solo pueden escribir las personas ya registradas y autorizadas.',
 ].join('\n');
 
 /** Lista los proximos eventos del usuario. */
@@ -704,16 +710,37 @@ async function isAdmin(phone) {
   }
 }
 
-/** Comando /agregar <numero> [nombre] */
+/**
+ * Comando /agregar <numero> [nombre]
+ *
+ * El rol NO se inventa: si no se indica uno explicito, el contacto queda como
+ * 'member' y sin nombre no se da de alta. La idea es que solo funcionarios
+ * verificados entren con acceso al bot, y que un numero suelto escrito en un
+ * grupo no se convierta en usuario por accidente.
+ */
 async function commandAddContact(args, fromPhone) {
   const [rawPhone, ...rest] = args;
   const phone = normalizePhone(rawPhone || '');
 
   if (phone.length < 8) {
-    return 'Uso: /agregar <numero> [nombre]\nEj: /agregar 5491198765432 Ana';
+    return 'Uso: /agregar <numero> <nombre> [rol]\nEj: /agregar 5491198765432 Ana admin';
   }
 
-  const name = rest.join(' ').trim();
+  // El ultimo token puede ser un rol explicito (admin|supervisor|member).
+  const ROLES_ = ['admin', 'supervisor', 'member'];
+  let tokens = rest.slice();
+  let rol = 'member';
+  if (tokens.length > 0 && ROLES_.includes(String(tokens[tokens.length - 1]).toLowerCase())) {
+    rol = String(tokens.pop()).toLowerCase();
+  }
+  const name = tokens.join(' ').trim();
+
+  // Sin nombre no se da de alta: un numero suelto no identifica a nadie y solo
+  // serviria para dejar acceso sin trazabilidad de quien es.
+  if (!name) {
+    return 'Necesito el *nombre* del contacto para darlo de alta.\nEj: /agregar 5491198765432 Ana';
+  }
+
   // Busca por variantes: si el numero ya existe con otro formato se actualiza
   // ese registro en vez de intentar crear uno que choca con el indice unico.
   const existe = await users.findByPhone(phone);
@@ -721,9 +748,9 @@ async function commandAddContact(args, fromPhone) {
   if (existe) {
     await User.updateOne(
       { _id: existe._id },
-      { $set: { phone, allowed: true, ...(name ? { name } : {}) } }
+      { $set: { phone, allowed: true, name, role: rol } }
     );
-    return `✅ *${phone}* ya estaba en la lista. Acceso reactivado.`;
+    return `✅ *${phone}* ya estaba en la lista. Acceso reactivado como *${rol}*.`;
   }
 
   await User.create({
@@ -731,11 +758,11 @@ async function commandAddContact(args, fromPhone) {
     passwordHash: 'sin-acceso-por-whatsapp',
     phone,
     name,
-    role: 'member',
+    role: rol,
     allowed: true,
   });
 
-  return `✅ *Contacto agregado*\n\n📱 ${phone}${name ? `\n👤 ${name}` : ''}\n\nYa puede escribir al bot.`;
+  return `✅ *Contacto agregado*\n\n📱 ${phone}\n👤 ${name}\n🔑 Rol: ${rol}\n\nYa puede escribir al bot.`;
 }
 
 /** Comando /quitar <numero> */
@@ -1294,24 +1321,26 @@ async function main() {
     console.error(`[app] no se pudo crear el usuario inicial: ${err.message}`);
   }
 
-  // Telefonos de WHITELIST se dan de alta como usuarios con acceso, para
-  // que la lista blanca viva en la base y no solo en el entorno.
+  // Los telefonos de WHITELIST ya NO se dan de alta solos al arrancar.
+  // Antes cada numero de esa variable creaba un usuario con `allowed: true`:
+  // que un numero estuviera en el entorno equivalia a tener cuenta, y el alta
+  // era automatica y nadie la revisaba. Ahora WHITELIST es solo una lista de
+  // numeros permitidos; para tener cuenta hay que crearla en el panel, con
+  // /agregar o con `npm run user -- create`.
   const envPhones = envWhitelist();
-  for (const phone of envPhones) {
-    const existe = await users.findByPhone(phone);
-    if (!existe) {
-      try {
-        await User.create({
-          username: `wa${phone}`,
-          passwordHash: 'sin-acceso-por-whatsapp',
-          phone,
-          name: '',
-          allowed: true,
-        });
-        console.log(`[app] usuario de WhatsApp dado de alta: ${phone}`);
-      } catch (err) {
-        console.error(`[app] no se pudo dar de alta ${phone}: ${err.message}`);
-      }
+  if (envPhones.length > 0) {
+    const sinFicha = [];
+    for (const phone of envPhones) {
+      const existe = await users.findByPhone(phone);
+      if (!existe) sinFicha.push(whitelist.enmascarar(phone));
+    }
+    if (sinFicha.length > 0) {
+      // Aviso, no error: el bot sigue funcionando con los que si tienen ficha.
+      console.warn(
+        `[app] ${sinFicha.length} numero(s) de WHITELIST sin ficha de usuario: ` +
+        `${sinFicha.join(', ')}. No tienen cuenta: no pueden escribir al bot ` +
+        'hasta que se los de de alta en el panel o con /agregar.'
+      );
     }
   }
 
