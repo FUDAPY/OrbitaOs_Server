@@ -53,6 +53,7 @@ lenguaje. Todo queda registrado en MongoDB y corre en Docker.
 - [Módulos](#-módulos)
 - [Decisiones de diseño](#-decisiones-de-diseño)
 - [Variables de entorno](#-variables-de-entorno)
+- [NexusOS (POS / ERP / CRM)](#nexusos-pos--erp--crm)
 - [Instalación](#-instalación)
 - [Despliegue en Dokploy](#-despliegue-en-dokploy)
 - [Uso por WhatsApp](#-uso-por-whatsapp)
@@ -177,6 +178,7 @@ eventos que entran en la ventana de 24 h o de 2 h.
 | `create_document` | Genera un documento | `type`, `title`, `content`, `format` |
 | `add_task` | Crea una tarea | `assignee`, `title`, `priority`, `due_at` |
 | `update_task` | Actualiza una tarea | `task_id`, `status` |
+| `adjust_stock` | Carga o descuenta stock en el POS (NexusOS) | `producto`, `cantidad`, `modo`, `sucursal` |
 
 ### Sin clave de IA, el sistema sigue andando
 
@@ -474,6 +476,12 @@ Se parte de `.env.example` como base. Las que no tienen valor por defecto son la
 | `WHITELIST` | vacío | Números con acceso. Opcional: el acceso real está en la base |
 | `GROUP_PREFIX` | vacío | Prefijo para que el bot conteste en grupos |
 
+> **Estar en `WHITELIST` no crea ninguna cuenta.** Solo marca el número como
+> permitido. Para que alguien tenga ficha hay que crearla en el panel
+> (Usuarios), con `/agregar`, o con `npm run user -- create`. Si un número de
+> la lista no tiene ficha, el bot lo avisa por log al arrancar y no lo deja
+> escribir: **no se dan de alta usuarios automáticamente**.
+
 ### Modelo
 
 | Variable | Por defecto | Para qué |
@@ -486,6 +494,66 @@ Se parte de `.env.example` como base. Las que no tienen valor por defecto son la
 | `AI_CONTEXT_MESSAGES` | `8` | Mensajes de contexto. Bajarlo abarata cada llamada |
 | `SPACE_BUNNY_DAILY_CAP` | `0` | Tope diario de llamadas. `0` = sin límite |
 | `WEB_SEARCH_ENABLED` | `true` | Habilita la herramienta `buscar_en_web` |
+
+### NexusOS (POS / ERP / CRM)
+
+Integración con el sistema de ventas: consultar y cargar stock desde WhatsApp.
+**Todo es opcional**: sin estas variables el bot funciona igual, solo pierde la
+carga de stock.
+
+| Variable | Por defecto | Para qué |
+|---|---|---|
+| `NEXUS_API_URL` | — | Base del API **con** el prefijo: `https://host/api/v1` |
+| `NEXUS_SERVICE_TOKEN` | — | **Secreto.** Token de servicio. Viaja en el header `x-service-token` |
+| `NEXUS_SUCURSALES` | — | Sucursales válidas, separadas por coma |
+| `NEXUS_TIMEOUT_MS` | `10000` | Espera máxima de una llamada |
+
+> ⚠️ **Las cuatro tienen que estar también en `docker-compose.yml`.** Dokploy no
+> inyecta las variables del Environment en el contenedor por su cuenta: si no
+> están referenciadas con `${...}` en el `environment:` del servicio, el bot no
+> llega a NexusOS aunque el panel las tenga cargadas.
+
+El token **nunca** se escribe en el código, en un log ni en un mensaje de
+respuesta: solo en el entorno. `src/nexus_client.js` expone `enmascarar()` para
+poder depurar sin exponerlo.
+
+#### Sucursales
+
+`NEXUS_SUCURSALES` lista los valores **exactos** que usa NexusOS en
+`products.sucursal`. Las mayúsculas y los espacios importan: el bot compara
+contra esa lista y no envía nunca un valor inventado.
+
+El usuario puede escribirla de cualquier forma; el bot la resuelve:
+
+| Dice el usuario | Se envía |
+|---|---|
+| `san benito`, `san benito cafe` | `San Benito Cafe Resto Bar` |
+| `chicolin`, `cafeteria`, `la cafeteria` | `CAFETERIA CHICOLIN` |
+
+Si **no** la menciona, el bot pregunta cuál antes de confirmar. No elige una
+por defecto: cargar en la sucursal equivocada descuadra el inventario y no se
+detecta hasta el conteo.
+
+#### Cómo se aplica una carga
+
+```
+"CARGAR EN STOCK PILSEN 1 LT - 6 UNIDADES"
+   → ¿en qué sucursal?  [1] San Benito Cafe Resto Bar  [2] CAFETERIA CHICOLIN
+   → "1"
+   → 📦 Confirmá la carga de stock
+      PILSEN 1 LT · 6 · agregar · San Benito Cafe Resto Bar
+   → "dale"
+   → ✅ Stock actualizado: 24 → 30
+```
+
+Nunca se escribe a partir de texto libre: primero se resuelve el producto
+contra el catálogo real, después se muestra el resumen y se espera un "sí".
+Si el producto no existe o hay varios parecidos, el bot pregunta en vez de
+elegir el primero.
+
+Cada carga lleva un `Idempotency-Key` propio, generado una vez por operación.
+Si el mismo mensaje se procesa dos veces, NexusOS lo detecta y devuelve
+`replayed: true`: el bot avisa "ya estaba cargado" y **no** suma de nuevo.
 
 ### Sesión de WhatsApp
 
@@ -733,6 +801,38 @@ En cualquier paso: `x` usa el valor por defecto, `saltar` crea la tarea ya y
 > Redacta un contrato entre el proveedor y la empresa
 ```
 
+**Stock del POS (NexusOS)**
+
+```
+> Cargar en stock Pilsen 1 LT, 6 unidades, en chicolin
+
+Bot: 📦 Confirmá la carga de stock
+     Producto: PILSEN 1 LT
+     Cantidad: 6
+     Modo: agregar
+     Sucursal: CAFETERIA CHICOLIN
+     Respondé "si" para aplicar o "no" para cancelar.
+
+dale
+Bot: ✅ Stock actualizado
+     PILSEN 1 LT
+     Antes: 24 → Ahora: 30
+```
+
+```
+> Cargar en stock Coca Cola 12 unidades
+
+Bot: 🏪 ¿En qué sucursal?
+     1. San Benito Cafe Resto Bar
+     2. CAFETERIA CHICOLIN
+     Respondé con el número.
+
+1
+Bot: 📦 Confirmá la carga de stock …  (espera el "si")
+```
+
+Requiere las variables `NEXUS_*`: ver [NexusOS](#nexusos-pos--erp--crm).
+
 **Consultas con internet**
 
 ```
@@ -765,6 +865,10 @@ lugar de inventar.
 | `npm run user -- <sub>` | Gestión de usuarios |
 | `npm run whitelist -- <sub>` | Gestión de la lista blanca |
 | `npm run check:whitelist` | Reglas de autorización (sin base de datos) |
+| `npm run check:alta` | Verifica que ningún usuario se cree automáticamente |
+| `npm run check:nexus` | Cliente de NexusOS y flujo de carga de stock |
+| `npm run check:views` | Estructura y comportamiento del panel |
+| `npm run check:panel` | Recorre la API del panel contra una base real |
 | `npm run reset:session` | Inspección y borrado del perfil de Chromium |
 | `npm run check:api` | Consulta la clave contra la API |
 | `npm run check:e2e` | Flujo completo contra la API |
@@ -1132,7 +1236,20 @@ npm test
 
 La suite corre sin red ni base de datos y cubre el parseo de JSON, los esquemas
 Mongoose, el control de acceso, el normalizador de fechas, el flujo de tareas, la
-limpieza de locks de Chromium, el servidor HTTP y las vistas del panel.
+limpieza de locks de Chromium, el servidor HTTP, las vistas del panel, el alta
+automática de usuarios y el cliente de NexusOS.
+
+**Pruebas de NexusOS.** `nexus_check.js` verifica el cliente, el flujo de carga
+de stock y la resolución de sucursales. Sin `NEXUS_API_URL` y
+`NEXUS_SERVICE_TOKEN` reales se **omite** la parte de integración (y también si
+el token es un placeholder tipo `<el hex>`), así que la suite sigue en verde
+sin credenciales. Con credenciales válidas prueba la consulta de stock y que
+repetir el mismo `Idempotency-Key` no vuelva a mover el stock.
+
+**Pruebas de alta.** `alta_check.js` comprueba que `getOrCreateUser()` no crea
+usuarios, que `WHITELIST` no da de alta cuentas al arrancar, que `/agregar`
+exige nombre y respeta el rol, y que el gate de autorización corta antes de
+guardar el mensaje y antes de llamar a la IA.
 
 Con MongoDB disponible:
 
@@ -1172,7 +1289,11 @@ npm run check:e2e
 | `network traefik not found` | El compose pedía una red externa que no existe | El compose ya no declara redes externas; la red la gestiona Dokploy |
 | Certificado que no se emite | El DNS no apunta al servidor | Corregir el registro A y esperar unos minutos |
 | Ninguna cita se agenda | La fecha quedó en un formato no contemplado | Verificar `TZ` y revisar los logs de `ai_router` |
-| El bot no responde a alguien | No tiene usuario con acceso | `/agregar <numero> <nombre>` o `npm run user -- create` |
+| El bot no responde a alguien | No tiene usuario con acceso | `/agregar <numero> <nombre> [rol]` o `npm run user -- create`. **Estar en `WHITELIST` no alcanza** |
+| "No pude conectar con el sistema de stock" | Faltan `NEXUS_API_URL` o `NEXUS_SERVICE_TOKEN` | Definirlas **y** referenciarlas en el `environment:` de `docker-compose.yml` |
+| La carga dice "No hay stock suficiente" | El egreso dejaría el stock en negativo | El stock de productos no admite negativos; NexusOS devuelve `422 STOCK_NEGATIVO` |
+| La carga dice "¿Para qué sucursal?" y no avanza | El valor no coincide con `NEXUS_SUCURSALES` | La comparación es exacta, con mayúsculas. Copiar el valor tal cual lo tiene `products.sucursal` en NexusOS |
+| El bot pregunta la sucursal aunque la haya mencionado | El alias no está en la lista de `NEXUS_SUCURSALES` | Agregar la sucursal a la variable, o usar el nombre exacto en el mensaje |
 | `MODO MOCK` en `/estado` | Falta la clave o falló la API | Verificar `SPACE_BUNNY_API_KEY` |
 | El código de vinculación no funciona | Se ingresó uno ya vencido | Usar el `codigo_vinculacion` de la URL, recién recargada |
 | Los logs repiten `QR recibido` | Con `BOT_PHONE` el QR no se usa: se vincula con el código de 8 caracteres | Normal, se descarta; buscá `CODIGO DE EMPAREJAMIENTO` |
