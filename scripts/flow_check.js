@@ -400,15 +400,12 @@ console.log('\nEmparejamiento de WhatsApp');
 check('soporta emparejamiento por codigo (BOT_PHONE)', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'index.js'), 'utf8');
   assert.ok(src.includes('BOT_PHONE'), 'debe leer BOT_PHONE');
-  assert.ok(
-    src.includes('requestPairingCode'),
-    'debe pedir el codigo de emparejamiento'
-  );
+  // whatsapp-web.js 1.34.7 emite 'code' ella misma desde inject() cuando se
+  // usa pairWithPhoneNumber; pedirlo a mano con requestPairingCode() despues
+  // de initialize() rechaza al instante.
+  assert.ok(src.includes('pairWithPhoneNumber'), 'debe usar la opcion de la libreria');
   assert.ok(src.includes("client.on('code'"), 'debe escuchar el evento code');
-  // Y debe pedirlo tras inicializar el navegador.
-  const init = src.indexOf('await client.initialize()');
-  const pairing = src.indexOf('requestPairingCode');
-  assert.ok(init > 0 && pairing > init, 'el codigo se pide despues de initialize');
+  assert.ok(!src.includes('requestPairingCode'), 'no debe pedir el codigo a mano');
 });
 
 check('el QR queda como respaldo cuando no hay BOT_PHONE', () => {
@@ -1009,20 +1006,19 @@ check('el arranque espera a que la sesion se anuncie', () => {
   const cuerpo = src.slice(init, src.indexOf('main().catch', init));
   const posInit = cuerpo.indexOf('await client.initialize();');
   const posEspera = cuerpo.indexOf('esperarVinculacion(15000)');
-  const posPagina = cuerpo.indexOf('esperarPaginaQr(90000)');
-  const posPide = cuerpo.indexOf('pedirCodigoDeEmparejamiento()');
+  const posCodigo = cuerpo.indexOf('esperarCodigo(90000)');
   assert.ok(init > 0, 'debe existir el arranque');
   assert.ok(posInit >= 0 && posEspera > posInit, 'debe esperar despues de initialize');
-  assert.ok(posPide > posEspera, 'debe esperar la sesion antes de pedir el codigo');
-  // La pagina tiene que existir antes de pedir el codigo, o la llamada expira.
-  assert.ok(posPagina > 0 && posPagina < posPide, 'debe esperar la pagina antes del codigo');
+  assert.ok(posCodigo > posEspera, 'debe esperar el codigo despues de la sesion');
+  // El codigo lo emite la libreria con pairWithPhoneNumber: no se pide a mano.
   assert.ok(cuerpo.includes('if (wantsPairing && !yaVinculado)'), 'el gate se mantiene');
+  assert.ok(!cuerpo.includes('requestPairingCode'), 'no debe pedir el codigo a mano');
 });
 
 check('una llamada colgada al navegador no frena el arranque', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'index.js'), 'utf8');
   assert.ok(src.includes('conTope'), 'debe haber un tope para las llamadas');
-  assert.ok(src.includes('pedirCodigoDeEmparejamiento'), 'debe pedir el codigo con reintentos');
+  assert.ok(src.includes('client.getWid()'), 'el numero vinculado se consulta con tope');
 });
 
 check('con BOT_PHONE se vincula por codigo, el QR se descarta', () => {
@@ -1041,15 +1037,14 @@ check('con BOT_PHONE se vincula por codigo, el QR se descarta', () => {
   assert.ok(hasta.includes('return;'), 'con BOT_PHONE el QR no se imprime');
   // Y aun asi sirve para saber que la pagina ya cargo.
   assert.ok(cuerpo.includes('qrVisto = true;'), 'el QR debe marcar la pagina como lista');
-  // El codigo se pide con reintentos.
-  const fn = src.indexOf('async function pedirCodigoDeEmparejamiento');
-  const cuerpo2 = src.slice(fn, src.indexOf('async function initializeWithRecovery'));
-  assert.ok(cuerpo2.includes('intentos'), 'debe reintentar');
-  assert.ok(cuerpo2.includes('requestPairingCode'), 'debe pedir el codigo');
-  assert.ok(cuerpo2.includes('dormir('), 'debe esperar entre intentos');
-  // Y si no sale, dice que revisar y donde mirar, sin ofrecer el QR.
-  assert.ok(cuerpo2.includes('codigo_vinculacion'), 'debe decir donde ver el codigo');
-  assert.ok(cuerpo2.includes('BOT_PHONE'), 'debe revisar el formato del numero');
+  // El codigo lo emite la propia libreria con pairWithPhoneNumber.
+  assert.ok(src.includes('pairWithPhoneNumber'), 'debe usar la opcion de la libreria');
+  assert.ok(src.includes('phoneNumber: BOT_PHONE'), 'debe pasarle el numero del bot');
+  assert.ok(src.includes("client.on('code'"), 'debe escuchar el evento code');
+  assert.ok(src.includes('function esperarCodigo'), 'debe esperar el evento code');
+  // Y si no llega, dice que revisar y donde mirar, sin ofrecer el QR.
+  assert.ok(src.includes('codigo_vinculacion'), 'debe decir donde ver el codigo');
+  assert.ok(src.includes('BOT_PHONE'), 'debe revisar el formato del numero');
 });
 
 check('un error interno de la libreria no tumba el bot', () => {
